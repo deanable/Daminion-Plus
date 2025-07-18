@@ -2,6 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using Microsoft.ML;
+using Microsoft.ML.Data;
+using Microsoft.ML.Transforms.Image;
+using System.IO;
+using System.Linq;
 
 namespace ImageTagger
 {
@@ -9,6 +14,12 @@ namespace ImageTagger
     {
         private string selectedImagePath;
         private List<string> currentTags = new List<string>();
+
+        // ML.NET model/label paths
+        private static readonly string ModelPath = "models/resnet50-v1-12.onnx";
+        private static readonly string LabelsPath = "models/imagenet_classes.txt";
+        private static readonly int ImageWidth = 224;
+        private static readonly int ImageHeight = 224;
 
         public MainForm()
         {
@@ -81,8 +92,50 @@ namespace ImageTagger
         // Placeholder for ML.NET tagging
         private async System.Threading.Tasks.Task<List<string>> TagImageWithMLNet(string imagePath)
         {
-            await System.Threading.Tasks.Task.Delay(500); // Simulate async call
-            return new List<string> { "mlnet", "local", "tag" };
+            // Load labels
+            var labels = File.ReadAllLines(LabelsPath);
+
+            // Create MLContext
+            var mlContext = new MLContext();
+
+            // Define input data
+            var data = new List<ImageInput> { new ImageInput { ImagePath = imagePath } };
+            var imageData = mlContext.Data.LoadFromEnumerable(data);
+
+            // Define pipeline
+            var pipeline = mlContext.Transforms.LoadImages(outputColumnName: "data", imageFolder: Path.GetDirectoryName(imagePath), inputColumnName: nameof(ImageInput.ImagePath))
+                .Append(mlContext.Transforms.ResizeImages(outputColumnName: "data", imageWidth: ImageWidth, imageHeight: ImageHeight, inputColumnName: "data"))
+                .Append(mlContext.Transforms.ExtractPixels(outputColumnName: "data"))
+                .Append(mlContext.Transforms.ApplyOnnxModel(
+                    modelFile: ModelPath,
+                    outputColumnNames: new[] { "resnetv24_dense0_fwd" },
+                    inputColumnNames: new[] { "data" }));
+
+            // Fit and transform
+            var model = pipeline.Fit(imageData);
+            var predictionEngine = mlContext.Model.CreatePredictionEngine<ImageInput, ImagePrediction>(model);
+            var prediction = predictionEngine.Predict(new ImageInput { ImagePath = imagePath });
+
+            // Get top 3 predictions
+            var topK = prediction.PredictedLabels
+                .Select((score, index) => new { Label = labels[index], Score = score })
+                .OrderByDescending(x => x.Score)
+                .Take(3)
+                .Select(x => x.Label)
+                .ToList();
+
+            return topK;
+        }
+
+        public class ImageInput
+        {
+            public string ImagePath { get; set; }
+        }
+
+        public class ImagePrediction
+        {
+            [ColumnName("resnetv24_dense0_fwd")]
+            public float[] PredictedLabels { get; set; }
         }
 
         // Placeholder for writing tags to image metadata
