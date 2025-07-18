@@ -4,9 +4,9 @@ using System.Drawing;
 using System.Windows.Forms;
 using Microsoft.ML;
 using Microsoft.ML.Data;
-using Microsoft.ML.Transforms.Image;
 using System.IO;
 using System.Linq;
+using Microsoft.ML.OnnxRuntime;
 
 namespace ImageTagger
 {
@@ -16,8 +16,8 @@ namespace ImageTagger
         private List<string> currentTags = new List<string>();
 
         // ML.NET model/label paths
-        private static readonly string ModelPath = "models/resnet50-v1-12.onnx";
-        private static readonly string LabelsPath = "models/imagenet_classes.txt";
+        private static readonly string ModelPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "resnet50-v1-12.onnx");
+        private static readonly string LabelsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "imagenet_classes.txt");
         private static readonly int ImageWidth = 224;
         private static readonly int ImageHeight = 224;
 
@@ -25,6 +25,25 @@ namespace ImageTagger
         {
             InitializeComponent();
             comboBoxTagMethod.SelectedIndex = 0;
+            // Removed PrintOnnxModelInfo from constructor
+        }
+
+        private void PrintOnnxModelInfo(string modelPath)
+        {
+            try
+            {
+                using var session = new InferenceSession(modelPath);
+                Console.WriteLine("ONNX Model Inputs:");
+                foreach (var input in session.InputMetadata)
+                    Console.WriteLine($"  {input.Key} : {input.Value.ElementType} [{string.Join(",", input.Value.Dimensions)}]");
+                Console.WriteLine("ONNX Model Outputs:");
+                foreach (var output in session.OutputMetadata)
+                    Console.WriteLine($"  {output.Key} : {output.Value.ElementType} [{string.Join(",", output.Value.Dimensions)}]");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error inspecting ONNX model: {ex.Message}");
+            }
         }
 
         private void btnSelectImage_Click(object sender, EventArgs e)
@@ -102,13 +121,16 @@ namespace ImageTagger
             var data = new List<ImageInput> { new ImageInput { ImagePath = imagePath } };
             var imageData = mlContext.Data.LoadFromEnumerable(data);
 
+            // Get ONNX output column name programmatically
+            string outputColumnName = GetOnnxOutputColumnName(ModelPath);
+
             // Define pipeline
             var pipeline = mlContext.Transforms.LoadImages(outputColumnName: "data", imageFolder: Path.GetDirectoryName(imagePath), inputColumnName: nameof(ImageInput.ImagePath))
                 .Append(mlContext.Transforms.ResizeImages(outputColumnName: "data", imageWidth: ImageWidth, imageHeight: ImageHeight, inputColumnName: "data"))
                 .Append(mlContext.Transforms.ExtractPixels(outputColumnName: "data"))
                 .Append(mlContext.Transforms.ApplyOnnxModel(
                     modelFile: ModelPath,
-                    outputColumnNames: new[] { "resnetv24_dense0_fwd" },
+                    outputColumnNames: new[] { outputColumnName },
                     inputColumnNames: new[] { "data" }));
 
             // Fit and transform
@@ -127,6 +149,13 @@ namespace ImageTagger
             return topK;
         }
 
+        private string GetOnnxOutputColumnName(string modelPath)
+        {
+            using var session = new InferenceSession(modelPath);
+            // Return the first output column name
+            return session.OutputMetadata.Keys.First();
+        }
+
         public class ImageInput
         {
             public string ImagePath { get; set; }
@@ -134,7 +163,8 @@ namespace ImageTagger
 
         public class ImagePrediction
         {
-            [ColumnName("resnetv24_dense0_fwd")]
+            // The output column name will be set dynamically at runtime
+            [ColumnName(null)]
             public float[] PredictedLabels { get; set; }
         }
 
