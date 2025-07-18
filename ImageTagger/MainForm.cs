@@ -163,8 +163,6 @@ namespace ImageTagger
 
         public class ImagePrediction
         {
-            // The output column name will be set dynamically at runtime
-            [ColumnName(null)]
             public float[] PredictedLabels { get; set; }
         }
 
