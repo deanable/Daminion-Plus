@@ -179,9 +179,14 @@ public class HuggingFaceModelService
                     searchTerms.AddRange(filterOptions.SearchTerms);
                 }
                 
-                // Only add format requirements if no user search terms provided
-                // This prevents overly restrictive searches
-                if (!searchTerms.Any() && filterOptions.SupportedFormats?.Any() == true)
+                // Always add ONNX requirement since we only support ONNX models
+                if (filterOptions.SupportedFormats?.Any() == true)
+                {
+                    searchTerms.AddRange(filterOptions.SupportedFormats);
+                }
+                
+                // Only add broader terms if no user search terms provided
+                if (!searchTerms.Any())
                 {
                     // Use broader terms that are more likely to find ONNX models
                     searchTerms.AddRange(new[] { "vision", "image", "classification" });
