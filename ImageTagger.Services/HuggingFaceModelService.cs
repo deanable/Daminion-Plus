@@ -43,7 +43,7 @@ public class HuggingFaceModelService
             }
             
             // Filter for computer vision models with ONNX files
-            parameters.Add("filter=task_categories:image-classification");
+            parameters.Add("filter=task_categories:image-classification|computer-vision");
             parameters.Add($"limit={limit}");
             parameters.Add("sort=downloads");
             parameters.Add("direction=-1");
@@ -147,13 +147,12 @@ public class HuggingFaceModelService
                 page++;
                 _loggingService.Log($"Scanning page {page}...");
                 
+                // Start with a simpler API call to test
                 var url = $"{HF_API_BASE}/models";
                 var parameters = new List<string>
                 {
                     $"limit={pageSize}",
-                    $"offset={pageSize * (page - 1)}",
-                    $"sort={filterOptions.SortBy}",
-                    $"direction={filterOptions.SortDirection}"
+                    $"offset={pageSize * (page - 1)}"
                 };
                 
                 // Add search filters
@@ -163,22 +162,12 @@ public class HuggingFaceModelService
                     parameters.Add($"search={Uri.EscapeDataString(searchQuery)}");
                 }
                 
-                // Add task category filters
+                // Add basic filters one at a time to avoid conflicts
                 if (filterOptions.TaskCategories?.Any() == true)
                 {
-                    foreach (var category in filterOptions.TaskCategories)
-                    {
-                        parameters.Add($"filter=task_categories:{category}");
-                    }
-                }
-                
-                // Add license filters
-                if (filterOptions.Licenses?.Any() == true)
-                {
-                    foreach (var license in filterOptions.Licenses)
-                    {
-                        parameters.Add($"filter=license:{license}");
-                    }
+                    // Try with just the first category for now
+                    var taskCategory = filterOptions.TaskCategories.First();
+                    parameters.Add($"filter=task_categories:{taskCategory}");
                 }
                 
                 if (parameters.Count > 0)
@@ -191,15 +180,28 @@ public class HuggingFaceModelService
                 var response = await _httpClient.GetAsync(url);
                 if (!response.IsSuccessStatusCode)
                 {
-                    _loggingService.Log($"Failed to fetch page {page}: {response.StatusCode}", LogLevel.Warning);
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    _loggingService.Log($"Failed to fetch page {page}: {response.StatusCode} - {errorContent}", LogLevel.Warning);
                     break;
                 }
                 
                 var json = await response.Content.ReadAsStringAsync();
-                var models = JsonSerializer.Deserialize<List<HuggingFaceModel>>(json, new JsonSerializerOptions
+                _loggingService.LogVerbose($"API Response (first 500 chars): {json.Substring(0, Math.Min(500, json.Length))}");
+                
+                List<HuggingFaceModel> models;
+                try
                 {
-                    PropertyNameCaseInsensitive = true
-                }) ?? new List<HuggingFaceModel>();
+                    models = JsonSerializer.Deserialize<List<HuggingFaceModel>>(json, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    }) ?? new List<HuggingFaceModel>();
+                }
+                catch (JsonException ex)
+                {
+                    _loggingService.Log($"Failed to deserialize JSON response: {ex.Message}", LogLevel.Error);
+                    _loggingService.Log($"JSON content: {json}", LogLevel.Error);
+                    break;
+                }
                 
                 if (models.Count == 0)
                 {

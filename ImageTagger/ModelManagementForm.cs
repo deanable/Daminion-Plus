@@ -162,7 +162,11 @@ public partial class ModelManagementForm : Form
             OnlyVerified = checkBoxOnlyVerified.Checked,
             PreferImageNetLabels = checkBoxPreferImageNet.Checked,
             Licenses = textBoxLicenses.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray(),
-            SearchTerms = textBoxSearchTerms.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray()
+            SearchTerms = textBoxSearchTerms.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray(),
+            SupportedFormats = new[] { "onnx" },
+            TaskCategories = new[] { "image-classification", "computer-vision" },
+            SortBy = "downloads",
+            SortDirection = "desc"
         };
     }
 
