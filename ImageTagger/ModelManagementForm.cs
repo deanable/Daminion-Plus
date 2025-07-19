@@ -115,7 +115,8 @@ public partial class ModelManagementForm : Form
             if (success)
             {
                 // Validate the downloaded model
-                var modelPath = Path.Combine("models", selectedModel.Name);
+                // For Hugging Face models, the path includes the full model ID with slashes replaced
+                var modelPath = Path.Combine("models", selectedModel.Name.Replace("/", "-"));
                 var isValid = await _modelDownloader.ValidateDownloadedModelAsync(selectedModel.Name, modelPath);
                 
                 if (isValid)
