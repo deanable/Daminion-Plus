@@ -283,7 +283,7 @@ public partial class ModelManagementForm : Form
         
         // Form
         this.Text = "Model Management";
-        this.Size = new Size(1000, 700);
+        this.Size = new Size(1000, 750);
         this.StartPosition = FormStartPosition.CenterParent;
         this.FormBorderStyle = FormBorderStyle.FixedDialog;
         this.MaximizeBox = false;
@@ -293,12 +293,12 @@ public partial class ModelManagementForm : Form
         this.label1.Location = new Point(12, 9);
         this.label1.Size = new Size(100, 20);
         
-        this.label2.Text = "Available Models (from ONNX Repository):";
+        this.label2.Text = "Available Models (from Hugging Face Hub):";
         this.label2.Location = new Point(12, 250);
-        this.label2.Size = new Size(250, 20);
+        this.label2.Size = new Size(280, 20);
         
         this.label3.Text = "Default Model:";
-        this.label3.Location = new Point(12, 500);
+        this.label3.Location = new Point(12, 520);
         this.label3.Size = new Size(100, 20);
         
         // Installed Models ListView
@@ -328,7 +328,7 @@ public partial class ModelManagementForm : Form
         this.listViewAvailableModels.SelectedIndexChanged += listViewAvailableModels_SelectedIndexChanged;
         
         // Default Model ComboBox
-        this.comboBoxDefaultModel.Location = new Point(120, 500);
+        this.comboBoxDefaultModel.Location = new Point(120, 520);
         this.comboBoxDefaultModel.Size = new Size(200, 25);
         this.comboBoxDefaultModel.DropDownStyle = ComboBoxStyle.DropDownList;
         this.comboBoxDefaultModel.SelectedIndexChanged += comboBoxDefaultModel_SelectedIndexChanged;
@@ -336,30 +336,30 @@ public partial class ModelManagementForm : Form
         // Buttons
         this.buttonDownloadModel.Text = "Download Selected Model";
         this.buttonDownloadModel.Location = new Point(12, 485);
-        this.buttonDownloadModel.Size = new Size(150, 30);
+        this.buttonDownloadModel.Size = new Size(160, 30);
         this.buttonDownloadModel.Enabled = false;
         this.buttonDownloadModel.Click += buttonDownloadModel_Click;
         
         this.buttonEnableDisable.Text = "Enable/Disable";
-        this.buttonEnableDisable.Location = new Point(180, 485);
-        this.buttonEnableDisable.Size = new Size(100, 30);
+        this.buttonEnableDisable.Location = new Point(190, 485);
+        this.buttonEnableDisable.Size = new Size(110, 30);
         this.buttonEnableDisable.Enabled = false;
         this.buttonEnableDisable.Click += buttonEnableDisable_Click;
         
         this.buttonValidateModel.Text = "Validate Model";
-        this.buttonValidateModel.Location = new Point(300, 485);
-        this.buttonValidateModel.Size = new Size(100, 30);
+        this.buttonValidateModel.Location = new Point(320, 485);
+        this.buttonValidateModel.Size = new Size(110, 30);
         this.buttonValidateModel.Enabled = false;
         this.buttonValidateModel.Click += buttonValidateModel_Click;
         
         this.buttonRefresh.Text = "Refresh";
-        this.buttonRefresh.Location = new Point(420, 485);
-        this.buttonRefresh.Size = new Size(80, 30);
+        this.buttonRefresh.Location = new Point(450, 485);
+        this.buttonRefresh.Size = new Size(90, 30);
         this.buttonRefresh.Click += buttonRefresh_Click;
         
         this.buttonClose.Text = "Close";
         this.buttonClose.Location = new Point(880, 485);
-        this.buttonClose.Size = new Size(80, 30);
+        this.buttonClose.Size = new Size(90, 30);
         this.buttonClose.Click += buttonClose_Click;
         
         // Add controls
