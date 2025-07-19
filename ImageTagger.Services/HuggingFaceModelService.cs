@@ -32,18 +32,21 @@ public class HuggingFaceModelService
             var url = $"{HF_API_BASE}/models";
             var parameters = new List<string>();
             
+            // Build search query
+            var searchTerms = new List<string>();
+            
             if (!string.IsNullOrEmpty(search))
             {
-                parameters.Add($"search={Uri.EscapeDataString(search)}");
+                searchTerms.Add(search);
             }
             else
             {
-                // Default search for ONNX models
-                parameters.Add("search=onnx");
+                // Default search for ONNX models with image classification
+                searchTerms.AddRange(new[] { "onnx", "image", "classification" });
             }
             
-            // Filter for computer vision models with ONNX files
-            parameters.Add("filter=task_categories:image-classification|computer-vision");
+            var searchQuery = string.Join(" ", searchTerms);
+            parameters.Add($"search={Uri.EscapeDataString(searchQuery)}");
             parameters.Add($"limit={limit}");
             parameters.Add("sort=downloads");
             parameters.Add("direction=-1");
@@ -147,7 +150,7 @@ public class HuggingFaceModelService
                 page++;
                 _loggingService.Log($"Scanning page {page}...");
                 
-                // Start with a simpler API call to test
+                // Build API URL with search-based filtering (more reliable than task filters)
                 var url = $"{HF_API_BASE}/models";
                 var parameters = new List<string>
                 {
@@ -155,19 +158,32 @@ public class HuggingFaceModelService
                     $"offset={pageSize * (page - 1)}"
                 };
                 
-                // Add search filters
+                // Build search query from multiple sources
+                var searchTerms = new List<string>();
+                
+                // Add user-provided search terms
                 if (filterOptions.SearchTerms?.Any() == true)
                 {
-                    var searchQuery = string.Join(" ", filterOptions.SearchTerms);
-                    parameters.Add($"search={Uri.EscapeDataString(searchQuery)}");
+                    searchTerms.AddRange(filterOptions.SearchTerms);
                 }
                 
-                // Add basic filters one at a time to avoid conflicts
+                // Add task categories as search terms (more reliable than filters)
                 if (filterOptions.TaskCategories?.Any() == true)
                 {
-                    // Try with just the first category for now
-                    var taskCategory = filterOptions.TaskCategories.First();
-                    parameters.Add($"filter=task_categories:{taskCategory}");
+                    searchTerms.AddRange(filterOptions.TaskCategories);
+                }
+                
+                // Add format requirements as search terms
+                if (filterOptions.SupportedFormats?.Any() == true)
+                {
+                    searchTerms.AddRange(filterOptions.SupportedFormats);
+                }
+                
+                // Combine all search terms
+                if (searchTerms.Any())
+                {
+                    var searchQuery = string.Join(" ", searchTerms.Distinct());
+                    parameters.Add($"search={Uri.EscapeDataString(searchQuery)}");
                 }
                 
                 if (parameters.Count > 0)
