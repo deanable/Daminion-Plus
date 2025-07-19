@@ -86,18 +86,18 @@ public class ModelDownloaderService
 
             // Use Hugging Face API to get available ONNX models
             var hfService = new HuggingFaceModelService(_loggingService, _modelsDirectory);
-            var availableModels = await hfService.GetAvailableModelsAsync("onnx image classification", 20);
+            var availableModels = await hfService.GetAvailableModelsAsync("onnx", 20);
 
-            // Add some known ONNX models that are available
+            // Add real, working ONNX models from Hugging Face
             var popularModels = new List<ModelInfo>
             {
                 new ModelInfo
                 {
-                    Name = "onnx-resnet50",
-                    DisplayName = "ONNX ResNet-50",
-                    Description = "ResNet-50 model in ONNX format for image classification",
+                    Name = "ctuning-resnet50-onnx",
+                    DisplayName = "CTuning ResNet-50 ONNX",
+                    Description = "MLPerf ResNet-50 ONNX model for ImageNet classification",
                     Source = "Hugging Face Hub",
-                    License = "MIT",
+                    License = "Apache 2.0",
                     ImageWidth = 224,
                     ImageHeight = 224,
                     ConfidenceThreshold = 0.1,
@@ -105,17 +105,17 @@ public class ModelDownloaderService
                     Priority = 100,
                     AdditionalProperties = new Dictionary<string, object>
                     {
-                        ["huggingface_id"] = "onnx/resnet50",
+                        ["huggingface_id"] = "ctuning/mlperf-inference-resnet50-onnx-fp32-imagenet2012-v1.0",
                         ["recommended"] = true
                     }
                 },
                 new ModelInfo
                 {
-                    Name = "microsoft-resnet50-onnx",
-                    DisplayName = "Microsoft ResNet-50 ONNX",
-                    Description = "Microsoft ResNet-50 model converted to ONNX format",
+                    Name = "mohitsha-resnet18-onnx",
+                    DisplayName = "Mohitsha ResNet-18 ONNX",
+                    Description = "ResNet-18 ONNX model for image classification",
                     Source = "Hugging Face Hub",
-                    License = "MIT",
+                    License = "Apache 2.0",
                     ImageWidth = 224,
                     ImageHeight = 224,
                     ConfidenceThreshold = 0.1,
@@ -123,7 +123,25 @@ public class ModelDownloaderService
                     Priority = 95,
                     AdditionalProperties = new Dictionary<string, object>
                     {
-                        ["huggingface_id"] = "microsoft/resnet50-onnx",
+                        ["huggingface_id"] = "mohitsha/transformers-resnet18-onnx-quantized-ryzen",
+                        ["recommended"] = true
+                    }
+                },
+                new ModelInfo
+                {
+                    Name = "sioood-autotrain-onnx",
+                    DisplayName = "Sioood AutoTrain ONNX",
+                    Description = "AutoTrain image classification model in ONNX format",
+                    Source = "Hugging Face Hub",
+                    License = "Unknown",
+                    ImageWidth = 224,
+                    ImageHeight = 224,
+                    ConfidenceThreshold = 0.1,
+                    MaxTags = 5,
+                    Priority = 90,
+                    AdditionalProperties = new Dictionary<string, object>
+                    {
+                        ["huggingface_id"] = "Sioood/autotrain-test-image-classification-ONNX",
                         ["recommended"] = true
                     }
                 }
