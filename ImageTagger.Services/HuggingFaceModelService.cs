@@ -153,14 +153,14 @@ public class HuggingFaceModelService
             
             // Download ONNX model
             var onnxPath = Path.Combine(targetPath, Path.GetFileName(onnxFile));
-            await DownloadFileAsync($"{HF_API_BASE}/models/{modelId}/resolve/main/{onnxFile}", onnxPath);
+            await DownloadFileAsync($"https://huggingface.co/{modelId}/resolve/main/{onnxFile}", onnxPath);
             
             // Look for labels file
             var labelsFile = modelFiles.FirstOrDefault(f => f.Contains("labels") || f.Contains("classes") || f.EndsWith(".txt"));
             if (!string.IsNullOrEmpty(labelsFile))
             {
                 var labelsPath = Path.Combine(targetPath, Path.GetFileName(labelsFile));
-                await DownloadFileAsync($"{HF_API_BASE}/models/{modelId}/resolve/main/{labelsFile}", labelsPath);
+                await DownloadFileAsync($"https://huggingface.co/{modelId}/resolve/main/{labelsFile}", labelsPath);
             }
             else
             {
