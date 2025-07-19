@@ -179,16 +179,17 @@ public class HuggingFaceModelService
                     searchTerms.AddRange(filterOptions.SearchTerms);
                 }
                 
-                // Always add ONNX requirement since we only support ONNX models
+                // Search for both ONNX and PyTorch models since we can convert PyTorch to ONNX
                 if (filterOptions.SupportedFormats?.Any() == true)
                 {
+                    // Add ONNX as preferred, but don't restrict to only ONNX
                     searchTerms.AddRange(filterOptions.SupportedFormats);
                 }
                 
                 // Only add broader terms if no user search terms provided
                 if (!searchTerms.Any())
                 {
-                    // Use broader terms that are more likely to find ONNX models
+                    // Use broader terms to find both ONNX and PyTorch models
                     searchTerms.AddRange(new[] { "vision", "image", "classification" });
                 }
                 
@@ -398,31 +399,43 @@ public class HuggingFaceModelService
 
     private bool HasCompatibleFiles(List<string> modelFiles, ModelFilterOptions filterOptions)
     {
-        // Check if model has any of the supported formats
-        var hasSupportedFormat = filterOptions.SupportedFormats.Any(format =>
-            modelFiles.Any(file => file.EndsWith($".{format}", StringComparison.OrdinalIgnoreCase)));
+        // Check if model has any compatible format (ONNX or PyTorch)
+        var hasOnnxFile = modelFiles.Any(file => file.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase));
+        var hasPytorchFile = modelFiles.Any(file => 
+            file.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) || 
+            file.EndsWith(".safetensors", StringComparison.OrdinalIgnoreCase) ||
+            file.EndsWith(".pt", StringComparison.OrdinalIgnoreCase) ||
+            file.EndsWith(".pth", StringComparison.OrdinalIgnoreCase));
         
-        if (!hasSupportedFormat)
+        if (!hasOnnxFile && !hasPytorchFile)
         {
             return false;
         }
         
-        // Check for labels/classes file
+        // Check for labels/classes file (optional since we can create basic labels)
         var hasLabelsFile = modelFiles.Any(file => 
             file.Contains("labels", StringComparison.OrdinalIgnoreCase) ||
             file.Contains("classes", StringComparison.OrdinalIgnoreCase) ||
             file.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
         
-        return hasLabelsFile;
+        // Accept models even without labels file since we can create basic ones
+        return true;
     }
 
     private ModelInfo? CreateModelInfoFromHuggingFaceModel(HuggingFaceModel model, List<string> modelFiles, ModelFilterOptions filterOptions)
     {
         try
         {
-            // Find ONNX file
+            // Find model file (ONNX preferred, but also accept PyTorch models since we can convert them)
             var onnxFile = modelFiles.FirstOrDefault(f => f.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase));
-            if (string.IsNullOrEmpty(onnxFile))
+            var pytorchFile = modelFiles.FirstOrDefault(f => 
+                f.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) || 
+                f.EndsWith(".safetensors", StringComparison.OrdinalIgnoreCase) ||
+                f.EndsWith(".pt", StringComparison.OrdinalIgnoreCase) ||
+                f.EndsWith(".pth", StringComparison.OrdinalIgnoreCase));
+            
+            var modelFile = onnxFile ?? pytorchFile;
+            if (string.IsNullOrEmpty(modelFile))
             {
                 return null;
             }
@@ -455,7 +468,8 @@ public class HuggingFaceModelService
                     ["downloads"] = model.Downloads ?? 0,
                     ["likes"] = model.Likes ?? 0,
                     ["tags"] = model.Tags ?? new List<string>(),
-                    ["onnx_file"] = onnxFile,
+                    ["model_file"] = modelFile,
+                    ["model_type"] = onnxFile != null ? "onnx" : "pytorch",
                     ["labels_file"] = labelsFile ?? "",
                     ["model_files"] = modelFiles,
                     ["last_updated"] = model.AdditionalProperties?.GetValueOrDefault("last_modified", DateTime.UtcNow) ?? DateTime.UtcNow,
@@ -541,18 +555,22 @@ public class HuggingFaceModelService
                 return false;
             }
             
-            // Find ONNX model file
+            // Find model file (ONNX preferred, but also accept PyTorch models)
             var onnxFile = modelFiles.FirstOrDefault(f => f.EndsWith(".onnx"));
-            if (string.IsNullOrEmpty(onnxFile))
+            var pytorchFile = modelFiles.FirstOrDefault(f => 
+                f.EndsWith(".bin") || f.EndsWith(".safetensors") || f.EndsWith(".pt") || f.EndsWith(".pth"));
+            
+            var modelFile = onnxFile ?? pytorchFile;
+            if (string.IsNullOrEmpty(modelFile))
             {
-                _loggingService.Log($"No ONNX file found for model {modelId}", LogLevel.Warning);
+                _loggingService.Log($"No compatible model file found for model {modelId}", LogLevel.Warning);
                 _loggingService.LogVerbose($"Available files: {string.Join(", ", modelFiles)}");
                 return false;
             }
             
-            // Download ONNX model
-            var onnxPath = Path.Combine(targetPath, Path.GetFileName(onnxFile));
-            await DownloadFileAsync($"https://huggingface.co/{modelId}/resolve/main/{onnxFile}", onnxPath);
+            // Download model file
+            var modelPath = Path.Combine(targetPath, Path.GetFileName(modelFile));
+            await DownloadFileAsync($"https://huggingface.co/{modelId}/resolve/main/{modelFile}", modelPath);
             
             // Look for labels file
             var labelsFile = modelFiles.FirstOrDefault(f => f.Contains("labels") || f.Contains("classes") || f.EndsWith(".txt"));

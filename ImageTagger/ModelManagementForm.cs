@@ -112,6 +112,7 @@ public partial class ModelManagementForm : Form
             item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("downloads", 0).ToString());
             item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("likes", 0).ToString());
             item.SubItems.Add(model.License ?? "Unknown");
+            item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("model_type", "unknown").ToString());
             item.SubItems.Add(model.Priority.ToString());
             item.SubItems.Add(model.Description ?? "");
             item.Tag = model;
@@ -891,8 +892,9 @@ public partial class ModelManagementForm : Form
         this.listViewRepositoryModels.Columns.Add("Downloads", 80);
         this.listViewRepositoryModels.Columns.Add("Likes", 60);
         this.listViewRepositoryModels.Columns.Add("License", 100);
+        this.listViewRepositoryModels.Columns.Add("Type", 80);
         this.listViewRepositoryModels.Columns.Add("Priority", 60);
-        this.listViewRepositoryModels.Columns.Add("Description", 400);
+        this.listViewRepositoryModels.Columns.Add("Description", 320);
         
         // Download Button
         this.buttonDownloadRepositoryModel.Text = "Download Selected";
