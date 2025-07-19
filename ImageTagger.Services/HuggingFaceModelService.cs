@@ -130,6 +130,7 @@ public class HuggingFaceModelService
             const int pageSize = 100;
             var hasMorePages = true;
             var processedModelIds = new HashSet<string>(); // Track processed model IDs to detect duplicates
+            var previousPageResponse = ""; // Track previous page response to detect identical pages
             
             // Apply default filter options if none provided
             filterOptions ??= new ModelFilterOptions
@@ -210,6 +211,14 @@ public class HuggingFaceModelService
                 var json = await response.Content.ReadAsStringAsync();
                 _loggingService.LogVerbose($"API Response (first 500 chars): {json.Substring(0, Math.Min(500, json.Length))}");
                 
+                // Check if this page response is identical to the previous page (API pagination issue)
+                if (page > 1 && json == previousPageResponse)
+                {
+                    _loggingService.Log($"Detected identical API response on page {page}, stopping pagination to prevent infinite loop", LogLevel.Warning);
+                    break;
+                }
+                previousPageResponse = json;
+                
                 List<HuggingFaceModel> models;
                 try
                 {
@@ -238,6 +247,13 @@ public class HuggingFaceModelService
                 if (page == 1 && models.Count <= 50)
                 {
                     _loggingService.Log($"Found {models.Count} models on first page, assuming complete result set");
+                }
+                
+                // FORCE STOP after first page for "onnx gemma" search - the API returns all results on every page
+                if (page == 1 && filterOptions.SearchTerms?.Any(s => s.Contains("gemma", StringComparison.OrdinalIgnoreCase)) == true)
+                {
+                    _loggingService.Log($"Detected Gemma search - forcing stop after first page to prevent infinite loop", LogLevel.Warning);
+                    hasMorePages = false;
                 }
                 
                 // Check for duplicate results (API returning same models on multiple pages)
