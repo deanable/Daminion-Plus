@@ -9,8 +9,7 @@ public class MicrosoftModelZooService
     private readonly ILoggingService _loggingService;
     private readonly HttpClient _httpClient;
     private readonly string _modelsDirectory;
-    private const string MODEL_ZOO_API_BASE = "https://raw.githubusercontent.com/onnx/models/main";
-    private const string MODEL_ZOO_INDEX_URL = "https://raw.githubusercontent.com/onnx/models/main/vision/classification/index.json";
+    private const string HF_LEGACY_MODELS_API = "https://huggingface.co/api/models/onnxmodelzoo/legacy_models/tree/main/Computer_Vision";
 
     public MicrosoftModelZooService(ILoggingService loggingService, string modelsDirectory = "models")
     {
@@ -23,56 +22,47 @@ public class MicrosoftModelZooService
     {
         try
         {
-            _loggingService.Log("Fetching models from Microsoft ONNX Model Zoo...");
-            
-            var response = await _httpClient.GetStringAsync(MODEL_ZOO_INDEX_URL);
-            var models = JsonSerializer.Deserialize<List<MicrosoftModelZooModel>>(response, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            }) ?? new List<MicrosoftModelZooModel>();
+            _loggingService.Log("Fetching Microsoft legacy ONNX models from Hugging Face...");
+            var response = await _httpClient.GetStringAsync(HF_LEGACY_MODELS_API);
+            var files = JsonSerializer.Deserialize<List<HuggingFaceFile>>(response, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new List<HuggingFaceFile>();
 
             var modelInfos = new List<ModelInfo>();
-            
-            foreach (var model in models)
+            foreach (var file in files)
             {
-                if (model.Framework?.ToLowerInvariant() == "onnx")
+                if (file.Type == "file" && file.Path != null && file.Path.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
                 {
+                    var modelName = Path.GetFileNameWithoutExtension(file.Path);
+                    var downloadUrl = $"https://huggingface.co/onnxmodelzoo/legacy_models/resolve/main/Computer_Vision/{Path.GetFileName(file.Path)}";
                     var modelInfo = new ModelInfo
                     {
-                        Name = model.Name?.Replace("/", "-") ?? "unknown",
-                        DisplayName = model.Name ?? "Unknown Model",
-                        Description = model.Description ?? "No description available",
-                        Source = "Microsoft ONNX Model Zoo",
-                        License = model.License ?? "Unknown",
-                        ImageWidth = 224, // Default, can be updated after download
+                        Name = modelName,
+                        DisplayName = modelName,
+                        Description = "Microsoft ONNX Model Zoo (Legacy, Hugging Face)",
+                        Source = "Microsoft ONNX Model Zoo (Hugging Face)",
+                        License = "Unknown",
+                        ImageWidth = 224,
                         ImageHeight = 224,
                         ConfidenceThreshold = 0.1,
                         MaxTags = 5,
-                        Priority = CalculatePriority(model),
+                        Priority = 50,
                         IsEnabled = false,
                         AdditionalProperties = new Dictionary<string, object>
                         {
-                            ["model_zoo_id"] = model.Name ?? "",
-                            ["framework"] = model.Framework ?? "",
-                            ["domain"] = model.Domain ?? "",
-                            ["dataset"] = model.Dataset ?? "",
-                            ["accuracy"] = model.Accuracy ?? "",
-                            ["model_size"] = model.ModelSize ?? "",
-                            ["download_url"] = model.DownloadUrl ?? "",
-                            ["labels_url"] = model.LabelsUrl ?? ""
+                            ["model_zoo_id"] = modelName,
+                            ["framework"] = "onnx",
+                            ["download_url"] = downloadUrl,
+                            ["labels_url"] = string.Empty // Could be improved if label files are found
                         }
                     };
-                    
                     modelInfos.Add(modelInfo);
                 }
             }
-
-            _loggingService.Log($"Found {modelInfos.Count} ONNX models from Microsoft Model Zoo");
+            _loggingService.Log($"Found {modelInfos.Count} Microsoft legacy ONNX models from Hugging Face");
             return modelInfos;
         }
         catch (Exception ex)
         {
-            _loggingService.LogException(ex, "GetAvailableModelsAsync from Microsoft Model Zoo");
+            _loggingService.LogException(ex, "GetAvailableModelsAsync from Hugging Face ONNX Model Zoo");
             return new List<ModelInfo>();
         }
     }
@@ -216,5 +206,12 @@ public class MicrosoftModelZooService
         public string? License { get; set; }
         public string? DownloadUrl { get; set; }
         public string? LabelsUrl { get; set; }
+    }
+
+    private class HuggingFaceFile
+    {
+        public string? Path { get; set; }
+        public string? Type { get; set; }
+        public long? Size { get; set; }
     }
 } 

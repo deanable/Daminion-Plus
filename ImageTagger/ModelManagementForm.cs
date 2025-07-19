@@ -286,12 +286,30 @@ public partial class ModelManagementForm : Form
                         {
                             successCount++;
                             _loggingService.Log($"Successfully downloaded model: {model.DisplayName}");
-                            
                             // Add to registry
                             var modelPath = Path.Combine("models", huggingfaceId.Replace("/", "-"));
                             var modelInfo = await _modelDownloader.CreateModelInfoFromDownloadedAsync(model.Name, modelPath);
                             _currentRegistry!.Models.Add(modelInfo);
                             await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
+                            // Prompt for ONNX conversion if needed
+                            var isOnnx = model.Name.ToLowerInvariant().EndsWith(".onnx") || model.AdditionalProperties.GetValueOrDefault("framework", "").ToString().ToLowerInvariant() == "onnx";
+                            if (!isOnnx)
+                            {
+                                var convertResult = MessageBox.Show($"Model '{model.DisplayName}' is not in ONNX format. Would you like to convert it now?", "Convert to ONNX", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                                if (convertResult == DialogResult.Yes)
+                                {
+                                    // Select the model in the list and trigger conversion
+                                    foreach (ListViewItem item in listViewRepositoryModels.Items)
+                                    {
+                                        if (item.Tag is ModelInfo mi && mi.Name == model.Name)
+                                        {
+                                            item.Selected = true;
+                                            break;
+                                        }
+                                    }
+                                    buttonConvertToOnnx.PerformClick();
+                                }
+                            }
                         }
                         else
                         {
@@ -303,15 +321,10 @@ public partial class ModelManagementForm : Form
                 {
                     _loggingService.LogException(ex, $"Download model {model.DisplayName}");
                 }
-
-                // Add delay to be respectful to the API
                 await Task.Delay(500);
             }
-
             labelRepositoryStatus.Text = $"Download complete: {successCount}/{selectedModels.Count} models downloaded successfully";
             MessageBox.Show($"Download complete!\n{successCount} out of {selectedModels.Count} models downloaded successfully.", "Download Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            
-            // Refresh the installed models list
             UpdateModelList();
         }
         catch (Exception ex)
@@ -680,6 +693,25 @@ public partial class ModelManagementForm : Form
         }
     }
 
+    private void listViewRepositoryModels_SelectedIndexChanged(object sender, EventArgs e)
+    {
+        if (listViewRepositoryModels.SelectedItems.Count == 0)
+        {
+            buttonConvertToOnnx.Enabled = false;
+            return;
+        }
+        var selectedModel = listViewRepositoryModels.SelectedItems[0].Tag as ModelInfo;
+        if (selectedModel == null)
+        {
+            buttonConvertToOnnx.Enabled = false;
+            return;
+        }
+        // Enable only if not ONNX
+        var name = selectedModel.Name?.ToLowerInvariant() ?? "";
+        var isOnnx = name.EndsWith(".onnx") || selectedModel.AdditionalProperties.GetValueOrDefault("framework", "").ToString().ToLowerInvariant() == "onnx";
+        buttonConvertToOnnx.Enabled = !isOnnx;
+    }
+
     private void InitializeComponent()
     {
         this.listViewInstalledModels = new ListView();
@@ -895,6 +927,7 @@ public partial class ModelManagementForm : Form
         this.listViewRepositoryModels.Columns.Add("Type", 80);
         this.listViewRepositoryModels.Columns.Add("Priority", 60);
         this.listViewRepositoryModels.Columns.Add("Description", 320);
+        this.listViewRepositoryModels.SelectedIndexChanged += listViewRepositoryModels_SelectedIndexChanged;
         
         // Download Button
         this.buttonDownloadRepositoryModel.Text = "Download Selected";
