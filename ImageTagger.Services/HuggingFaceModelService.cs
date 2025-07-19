@@ -129,6 +129,7 @@ public class HuggingFaceModelService
             var page = 0;
             const int pageSize = 100;
             var hasMorePages = true;
+            var processedModelIds = new HashSet<string>(); // Track processed model IDs to detect duplicates
             
             // Apply default filter options if none provided
             filterOptions ??= new ModelFilterOptions
@@ -150,12 +151,21 @@ public class HuggingFaceModelService
                 page++;
                 _loggingService.Log($"Scanning page {page}...");
                 
+                // Safety check to prevent infinite loops
+                if (page > 100)
+                {
+                    _loggingService.Log($"Reached maximum page limit (100), stopping to prevent infinite loop", LogLevel.Warning);
+                    break;
+                }
+                
                 // Build API URL with search-based filtering (more reliable than task filters)
                 var url = $"{HF_API_BASE}/models";
                 var parameters = new List<string>
                 {
                     $"limit={pageSize}",
-                    $"offset={pageSize * (page - 1)}"
+                    $"offset={pageSize * (page - 1)}",
+                    "sort=downloads",
+                    "direction=-1"
                 };
                 
                 // Build search query - prioritize user search terms, avoid overly restrictive combinations
@@ -224,6 +234,23 @@ public class HuggingFaceModelService
                 
                 _loggingService.Log($"Found {models.Count} models on page {page}");
                 
+                // Check for duplicate results (API returning same models on multiple pages)
+                var newModelIds = models.Where(m => !string.IsNullOrEmpty(m.Id)).Select(m => m.Id!).ToHashSet();
+                var duplicateCount = newModelIds.Count(id => processedModelIds.Contains(id));
+                
+                if (duplicateCount > 0 && page > 1)
+                {
+                    _loggingService.Log($"Detected {duplicateCount} duplicate models on page {page}, stopping pagination to avoid infinite loop");
+                    break;
+                }
+                
+                // Check if we're getting the same models repeatedly (API pagination issue)
+                if (page > 1 && models.Count == newModelIds.Count && duplicateCount == models.Count)
+                {
+                    _loggingService.Log($"API is returning the same {models.Count} models repeatedly, stopping pagination", LogLevel.Warning);
+                    break;
+                }
+                
                 // Filter and process models
                 foreach (var model in models)
                 {
@@ -258,6 +285,7 @@ public class HuggingFaceModelService
                         if (modelInfo != null)
                         {
                             allModels.Add(modelInfo);
+                            processedModelIds.Add(model.Id!); // Track this model as processed
                             _loggingService.LogVerbose($"Added compatible model: {modelInfo.DisplayName} (Downloads: {detailedModel.Downloads})");
                         }
                     }
