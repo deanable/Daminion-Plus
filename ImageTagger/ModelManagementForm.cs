@@ -10,6 +10,8 @@ public partial class ModelManagementForm : Form
     private readonly IModelManager _modelManager;
     private readonly ModelDownloaderService _modelDownloader;
     private readonly HuggingFaceModelService _hfService;
+    private readonly MicrosoftModelZooService _msModelZooService;
+    private readonly ModelConversionService _conversionService;
     private readonly ILoggingService _loggingService;
     private ModelRegistry? _currentRegistry;
     private List<ModelInfo> _allRepositoryModels = new();
@@ -23,6 +25,8 @@ public partial class ModelManagementForm : Form
         _modelManager = new ModelManager(loggingService);
         _modelDownloader = new ModelDownloaderService(loggingService);
         _hfService = new HuggingFaceModelService(loggingService);
+        _msModelZooService = new MicrosoftModelZooService(loggingService);
+        _conversionService = new ModelConversionService(loggingService);
         
         LoadModelsAsync();
     }
@@ -504,6 +508,177 @@ public partial class ModelManagementForm : Form
         buttonDownloadModel.Enabled = listViewAvailableModels.SelectedItems.Count > 0;
     }
 
+    private List<ModelInfo> _allModelZooModels = new();
+    private bool _isScanningModelZoo = false;
+
+    private async void buttonScanModelZoo_Click(object sender, EventArgs e)
+    {
+        if (_isScanningModelZoo) return;
+
+        _isScanningModelZoo = true;
+        buttonScanModelZoo.Enabled = false;
+        labelModelZooStatus.Text = "Scanning Microsoft Model Zoo...";
+
+        try
+        {
+            _allModelZooModels = await _msModelZooService.GetAvailableModelsAsync();
+            UpdateModelZooList();
+            labelModelZooStatus.Text = $"Found {_allModelZooModels.Count} models";
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "Scan Microsoft Model Zoo");
+            MessageBox.Show($"Failed to scan Microsoft Model Zoo: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            labelModelZooStatus.Text = "Scan failed";
+        }
+        finally
+        {
+            buttonScanModelZoo.Enabled = true;
+            _isScanningModelZoo = false;
+        }
+    }
+
+    private void UpdateModelZooList()
+    {
+        listViewModelZoo.Items.Clear();
+        
+        foreach (var model in _allModelZooModels.OrderByDescending(m => m.Priority))
+        {
+            var item = new ListViewItem(model.DisplayName);
+            item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("framework", "").ToString());
+            item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("dataset", "").ToString());
+            item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("accuracy", "").ToString());
+            item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("model_size", "").ToString());
+            item.SubItems.Add(model.License ?? "Unknown");
+            item.SubItems.Add(model.Priority.ToString());
+            item.SubItems.Add(model.Description ?? "");
+            item.Tag = model;
+            
+            listViewModelZoo.Items.Add(item);
+        }
+    }
+
+    private async void buttonDownloadModelZoo_Click(object sender, EventArgs e)
+    {
+        if (listViewModelZoo.SelectedItems.Count == 0)
+        {
+            MessageBox.Show("Please select a model to download.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var selectedModel = listViewModelZoo.SelectedItems[0].Tag as ModelInfo;
+        if (selectedModel == null) return;
+
+        var modelId = selectedModel.AdditionalProperties.GetValueOrDefault("model_zoo_id", "").ToString();
+        if (string.IsNullOrEmpty(modelId))
+        {
+            MessageBox.Show("Invalid model selection.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            buttonDownloadModelZoo.Enabled = false;
+            labelModelZooStatus.Text = $"Downloading {selectedModel.DisplayName}...";
+
+            var success = await _msModelZooService.DownloadModelAsync(modelId);
+            
+            if (success)
+            {
+                MessageBox.Show($"Successfully downloaded {selectedModel.DisplayName}", "Download Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                labelModelZooStatus.Text = $"Downloaded {selectedModel.DisplayName}";
+                
+                // Refresh installed models list
+                LoadModelsAsync();
+            }
+            else
+            {
+                MessageBox.Show($"Failed to download {selectedModel.DisplayName}", "Download Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                labelModelZooStatus.Text = "Download failed";
+            }
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, $"Download Microsoft Model Zoo model {modelId}");
+            MessageBox.Show($"Error downloading model: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            labelModelZooStatus.Text = "Download error";
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+            buttonDownloadModelZoo.Enabled = true;
+        }
+    }
+
+    private async void buttonConvertToOnnx_Click(object sender, EventArgs e)
+    {
+        if (listViewRepositoryModels.SelectedItems.Count == 0)
+        {
+            MessageBox.Show("Please select a PyTorch model to convert to ONNX.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var selectedModel = listViewRepositoryModels.SelectedItems[0].Tag as ModelInfo;
+        if (selectedModel == null) return;
+
+        var modelId = selectedModel.AdditionalProperties.GetValueOrDefault("model_id", "").ToString();
+        if (string.IsNullOrEmpty(modelId))
+        {
+            MessageBox.Show("Invalid model selection.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        // Check if conversion is supported
+        var isSupported = await _conversionService.IsConversionSupportedAsync(modelId);
+        if (!isSupported)
+        {
+            var result = MessageBox.Show(
+                $"Model {selectedModel.DisplayName} may not be compatible with ONNX conversion. Continue anyway?",
+                "Conversion Warning",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            
+            if (result != DialogResult.Yes)
+                return;
+        }
+
+        try
+        {
+            Cursor = Cursors.WaitCursor;
+            buttonConvertToOnnx.Enabled = false;
+            labelRepositoryStatus.Text = $"Converting {selectedModel.DisplayName} to ONNX...";
+
+            // For now, we'll use the model ID directly (in a real implementation, you'd download the PyTorch model first)
+            var success = await _conversionService.ConvertPyTorchToOnnxAsync(modelId, "", "");
+            
+            if (success)
+            {
+                MessageBox.Show($"Successfully converted {selectedModel.DisplayName} to ONNX format", "Conversion Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                labelRepositoryStatus.Text = $"Converted {selectedModel.DisplayName} to ONNX";
+                
+                // Refresh installed models list
+                LoadModelsAsync();
+            }
+            else
+            {
+                MessageBox.Show($"Failed to convert {selectedModel.DisplayName} to ONNX format", "Conversion Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                labelRepositoryStatus.Text = "Conversion failed";
+            }
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, $"Convert to ONNX for {modelId}");
+            MessageBox.Show($"Error converting model: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            labelRepositoryStatus.Text = "Conversion error";
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+            buttonConvertToOnnx.Enabled = true;
+        }
+    }
+
     private void InitializeComponent()
     {
         this.listViewInstalledModels = new ListView();
@@ -516,6 +691,7 @@ public partial class ModelManagementForm : Form
         this.buttonClose = new Button();
         this.buttonScanRepository = new Button();
         this.buttonDownloadRepositoryModel = new Button();
+        this.buttonConvertToOnnx = new Button();
         this.buttonApplyFilters = new Button();
         this.buttonClearFilters = new Button();
         this.comboBoxDefaultModel = new ComboBox();
@@ -542,6 +718,12 @@ public partial class ModelManagementForm : Form
         this.tabControl = new TabControl();
         this.tabPageInstalled = new TabPage();
         this.tabPageRepository = new TabPage();
+        this.tabPageModelZoo = new TabPage();
+        this.listViewModelZoo = new ListView();
+        this.buttonScanModelZoo = new Button();
+        this.buttonDownloadModelZoo = new Button();
+        this.labelModelZoo = new Label();
+        this.labelModelZooStatus = new Label();
         this.SuspendLayout();
         
         // Form
@@ -555,6 +737,7 @@ public partial class ModelManagementForm : Form
         this.tabControl.Dock = DockStyle.Fill;
         this.tabControl.Controls.Add(this.tabPageInstalled);
         this.tabControl.Controls.Add(this.tabPageRepository);
+        this.tabControl.Controls.Add(this.tabPageModelZoo);
         
         // Tab Page 1 - Installed Models
         this.tabPageInstalled.Text = "Installed Models";
@@ -718,6 +901,13 @@ public partial class ModelManagementForm : Form
         this.buttonDownloadRepositoryModel.BackColor = Color.LightBlue;
         this.buttonDownloadRepositoryModel.Click += buttonDownloadRepositoryModel_Click;
         
+        // Convert to ONNX Button
+        this.buttonConvertToOnnx.Text = "Convert to ONNX";
+        this.buttonConvertToOnnx.Location = new Point(140, 710);
+        this.buttonConvertToOnnx.Size = new Size(120, 30);
+        this.buttonConvertToOnnx.BackColor = Color.Orange;
+        this.buttonConvertToOnnx.Click += buttonConvertToOnnx_Click;
+        
         // Add controls to Repository Browser tab
         this.tabPageRepository.Controls.AddRange(new Control[] {
             this.labelRepositoryFilters, this.labelRepositoryStatus,
@@ -726,7 +916,57 @@ public partial class ModelManagementForm : Form
             this.labelMinDownloadsValue, this.labelMaxSizeValue, this.labelMinLikesValue, this.labelMaxModelsValue,
             this.checkBoxExcludeArchived, this.checkBoxExcludePrivate, this.checkBoxOnlyVerified, this.checkBoxPreferImageNet,
             this.buttonApplyFilters, this.buttonClearFilters, this.buttonScanRepository,
-            this.progressBarRepository, this.listViewRepositoryModels, this.buttonDownloadRepositoryModel
+            this.progressBarRepository, this.listViewRepositoryModels, this.buttonDownloadRepositoryModel, this.buttonConvertToOnnx
+        });
+        
+        // Tab Page 3 - Microsoft Model Zoo
+        this.tabPageModelZoo.Text = "Microsoft Model Zoo";
+        this.tabPageModelZoo.Padding = new Padding(10);
+        
+        // Model Zoo Label
+        this.labelModelZoo.Text = "Microsoft ONNX Model Zoo:";
+        this.labelModelZoo.Location = new Point(12, 9);
+        this.labelModelZoo.Size = new Size(200, 20);
+        this.labelModelZoo.Font = new Font(Font.FontFamily, 10, FontStyle.Bold);
+        
+        // Model Zoo Models ListView
+        this.listViewModelZoo.Location = new Point(12, 35);
+        this.listViewModelZoo.Size = new Size(1140, 400);
+        this.listViewModelZoo.View = View.Details;
+        this.listViewModelZoo.FullRowSelect = true;
+        this.listViewModelZoo.GridLines = true;
+        this.listViewModelZoo.MultiSelect = true;
+        this.listViewModelZoo.Columns.Add("Model", 200);
+        this.listViewModelZoo.Columns.Add("Framework", 80);
+        this.listViewModelZoo.Columns.Add("Dataset", 100);
+        this.listViewModelZoo.Columns.Add("Accuracy", 120);
+        this.listViewModelZoo.Columns.Add("Size", 80);
+        this.listViewModelZoo.Columns.Add("License", 100);
+        this.listViewModelZoo.Columns.Add("Priority", 60);
+        this.listViewModelZoo.Columns.Add("Description", 300);
+        
+        // Model Zoo Buttons
+        this.buttonScanModelZoo.Text = "🔍 Scan Model Zoo";
+        this.buttonScanModelZoo.Location = new Point(12, 450);
+        this.buttonScanModelZoo.Size = new Size(140, 30);
+        this.buttonScanModelZoo.BackColor = Color.LightBlue;
+        this.buttonScanModelZoo.Click += buttonScanModelZoo_Click;
+        
+        this.buttonDownloadModelZoo.Text = "Download Selected";
+        this.buttonDownloadModelZoo.Location = new Point(160, 450);
+        this.buttonDownloadModelZoo.Size = new Size(120, 30);
+        this.buttonDownloadModelZoo.BackColor = Color.LightGreen;
+        this.buttonDownloadModelZoo.Click += buttonDownloadModelZoo_Click;
+        
+        // Model Zoo Status
+        this.labelModelZooStatus.Text = "Ready to scan Microsoft Model Zoo";
+        this.labelModelZooStatus.Location = new Point(290, 455);
+        this.labelModelZooStatus.Size = new Size(300, 20);
+        
+        // Add controls to Model Zoo tab
+        this.tabPageModelZoo.Controls.AddRange(new Control[] {
+            this.labelModelZoo, this.listViewModelZoo, this.buttonScanModelZoo,
+            this.buttonDownloadModelZoo, this.labelModelZooStatus
         });
         
         // Add tab control to form
@@ -820,6 +1060,7 @@ public partial class ModelManagementForm : Form
     private Button buttonClose;
     private Button buttonScanRepository;
     private Button buttonDownloadRepositoryModel;
+    private Button buttonConvertToOnnx;
     private Button buttonApplyFilters;
     private Button buttonClearFilters;
     private ComboBox comboBoxDefaultModel;
@@ -846,4 +1087,10 @@ public partial class ModelManagementForm : Form
     private TabControl tabControl;
     private TabPage tabPageInstalled;
     private TabPage tabPageRepository;
+    private TabPage tabPageModelZoo;
+    private ListView listViewModelZoo;
+    private Button buttonScanModelZoo;
+    private Button buttonDownloadModelZoo;
+    private Label labelModelZoo;
+    private Label labelModelZooStatus;
 } 
