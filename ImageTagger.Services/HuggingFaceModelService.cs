@@ -36,8 +36,13 @@ public class HuggingFaceModelService
             {
                 parameters.Add($"search={Uri.EscapeDataString(search)}");
             }
+            else
+            {
+                // Default search for ONNX models
+                parameters.Add("search=onnx");
+            }
             
-            // Filter for computer vision models
+            // Filter for computer vision models with ONNX files
             parameters.Add("filter=task_categories:image-classification");
             parameters.Add($"limit={limit}");
             parameters.Add("sort=downloads");

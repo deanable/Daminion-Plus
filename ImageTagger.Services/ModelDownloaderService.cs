@@ -84,18 +84,18 @@ public class ModelDownloaderService
         {
             _loggingService.Log("Fetching available models from Hugging Face Hub");
 
-            // Use Hugging Face API to get available models
+            // Use Hugging Face API to get available ONNX models
             var hfService = new HuggingFaceModelService(_loggingService, _modelsDirectory);
-            var availableModels = await hfService.GetAvailableModelsAsync("image classification", 20);
+            var availableModels = await hfService.GetAvailableModelsAsync("onnx image classification", 20);
 
-            // Add some popular models that we know work well
+            // Add some known ONNX models that are available
             var popularModels = new List<ModelInfo>
             {
                 new ModelInfo
                 {
-                    Name = "microsoft-resnet-50",
-                    DisplayName = "Microsoft ResNet-50",
-                    Description = "ResNet-50 model for image classification with 1000 ImageNet classes",
+                    Name = "onnx-resnet50",
+                    DisplayName = "ONNX ResNet-50",
+                    Description = "ResNet-50 model in ONNX format for image classification",
                     Source = "Hugging Face Hub",
                     License = "MIT",
                     ImageWidth = 224,
@@ -105,17 +105,17 @@ public class ModelDownloaderService
                     Priority = 100,
                     AdditionalProperties = new Dictionary<string, object>
                     {
-                        ["huggingface_id"] = "microsoft/resnet-50",
+                        ["huggingface_id"] = "onnx/resnet50",
                         ["recommended"] = true
                     }
                 },
                 new ModelInfo
                 {
-                    Name = "google-vit-base-patch16-224",
-                    DisplayName = "Google ViT Base",
-                    Description = "Vision Transformer (ViT) model for image classification",
+                    Name = "microsoft-resnet50-onnx",
+                    DisplayName = "Microsoft ResNet-50 ONNX",
+                    Description = "Microsoft ResNet-50 model converted to ONNX format",
                     Source = "Hugging Face Hub",
-                    License = "Apache 2.0",
+                    License = "MIT",
                     ImageWidth = 224,
                     ImageHeight = 224,
                     ConfidenceThreshold = 0.1,
@@ -123,25 +123,7 @@ public class ModelDownloaderService
                     Priority = 95,
                     AdditionalProperties = new Dictionary<string, object>
                     {
-                        ["huggingface_id"] = "google/vit-base-patch16-224",
-                        ["recommended"] = true
-                    }
-                },
-                new ModelInfo
-                {
-                    Name = "facebook-deit-base-distilled-patch16-224",
-                    DisplayName = "Facebook DeiT Base",
-                    Description = "Data-efficient image Transformers (DeiT) model",
-                    Source = "Hugging Face Hub",
-                    License = "Apache 2.0",
-                    ImageWidth = 224,
-                    ImageHeight = 224,
-                    ConfidenceThreshold = 0.1,
-                    MaxTags = 5,
-                    Priority = 90,
-                    AdditionalProperties = new Dictionary<string, object>
-                    {
-                        ["huggingface_id"] = "facebook/deit-base-distilled-patch16-224",
+                        ["huggingface_id"] = "microsoft/resnet50-onnx",
                         ["recommended"] = true
                     }
                 }
