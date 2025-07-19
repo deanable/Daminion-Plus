@@ -129,25 +129,26 @@ public class MLNetTaggingService : IImageTaggingService
         var data = new List<ImageInput> { new() { ImagePath = imagePath } };
         var imageData = mlContext.Data.LoadFromEnumerable(data);
 
-        // Get ONNX output column name programmatically
-        string outputColumnName = GetOnnxOutputColumnName(_modelPath);
+        // Get ONNX input and output column names programmatically
+        var (inputColumnName, outputColumnName) = GetOnnxColumnNames(_modelPath);
+        _loggingService.Log($"Detected ONNX input column name: {inputColumnName}", LogLevel.Debug);
         _loggingService.Log($"Detected ONNX output column name: {outputColumnName}", LogLevel.Debug);
 
         // Define pipeline
         var pipeline = mlContext.Transforms.LoadImages(
-                outputColumnName: "data",
+                outputColumnName: inputColumnName,
                 imageFolder: Path.GetDirectoryName(imagePath),
                 inputColumnName: nameof(ImageInput.ImagePath))
             .Append(mlContext.Transforms.ResizeImages(
-                outputColumnName: "data",
+                outputColumnName: inputColumnName,
                 imageWidth: _imageWidth,
                 imageHeight: _imageHeight,
-                inputColumnName: "data"))
-            .Append(mlContext.Transforms.ExtractPixels(outputColumnName: "data"))
+                inputColumnName: inputColumnName))
+            .Append(mlContext.Transforms.ExtractPixels(outputColumnName: inputColumnName))
             .Append(mlContext.Transforms.ApplyOnnxModel(
                 modelFile: _modelPath,
                 outputColumnNames: new[] { outputColumnName },
-                inputColumnNames: new[] { "data" }));
+                inputColumnNames: new[] { inputColumnName }));
 
         // Fit and transform
         var model = pipeline.Fit(imageData);
@@ -211,6 +212,29 @@ public class MLNetTaggingService : IImageTaggingService
         return predictions;
     }
 
+    private (string inputColumnName, string outputColumnName) GetOnnxColumnNames(string modelPath)
+    {
+        try
+        {
+            using var session = new InferenceSession(modelPath);
+            
+            // Get input column name
+            var inputName = session.InputMetadata.Keys.First();
+            _loggingService.Log($"ONNX input column name: {inputName}", LogLevel.Debug);
+            
+            // Get output column name
+            var outputName = session.OutputMetadata.Keys.First();
+            _loggingService.Log($"ONNX output column name: {outputName}", LogLevel.Debug);
+            
+            return (inputName, outputName);
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "GetOnnxColumnNames");
+            throw new ApplicationException($"Failed to get ONNX column names: {ex.Message}", ex);
+        }
+    }
+
     private string GetOnnxOutputColumnName(string modelPath)
     {
         try
@@ -234,7 +258,6 @@ public class MLNetTaggingService : IImageTaggingService
 
     private class ImagePrediction
     {
-        [ColumnName("resnetv17_dense0_fwd")]
         public float[] PredictedLabels { get; set; } = Array.Empty<float>();
     }
 } 
