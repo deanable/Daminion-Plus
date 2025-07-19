@@ -111,6 +111,10 @@ public partial class MainForm : Form
         // Initialize model registry and add ML.NET services
         InitializeModelRegistry();
         
+        // Load the model registry to get proper display names
+        var registryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "model_registry.json");
+        var registry = _modelManager.LoadModelRegistryAsync(registryPath).Result;
+        
         // Add ML.NET services for each available model
         var modelsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
         _loggingService.Log($"Checking for models in directory: {modelsDirectory}");
@@ -198,6 +202,7 @@ public partial class MainForm : Form
                                 labelsFile,
                                 maxTags: _settings.Model.MaxTags,
                                 confidenceThreshold: _settings.Model.ConfidenceThreshold);
+                            
                             services.Add(service);
                             _loggingService.Log($"Successfully added ML.NET service for subdirectory model: {subdirName}");
                         }
@@ -593,11 +598,14 @@ public partial class MainForm : Form
             comboBoxTagMethod.Items.Clear();
             comboBoxTagMethod.Items.Add("Cloud API");
             
-            foreach (var model in enabledModels)
+            // Add services based on actual service names, not registry display names
+            foreach (var service in _taggingServices)
             {
-                var serviceName = $"ML.NET ({model.DisplayName})";
-                comboBoxTagMethod.Items.Add(serviceName);
-                _loggingService.LogVerbose($"Added model to dropdown: {serviceName}");
+                if (service.ServiceName != "Cloud API")
+                {
+                    comboBoxTagMethod.Items.Add(service.ServiceName);
+                    _loggingService.LogVerbose($"Added service to dropdown: {service.ServiceName}");
+                }
             }
             
             if (comboBoxTagMethod.Items.Count > 0)
