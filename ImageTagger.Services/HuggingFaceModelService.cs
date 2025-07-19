@@ -234,17 +234,26 @@ public class HuggingFaceModelService
                 
                 _loggingService.Log($"Found {models.Count} models on page {page}");
                 
+                // If we get a small number of models on the first page, assume that's all there are
+                if (page == 1 && models.Count <= 50)
+                {
+                    _loggingService.Log($"Found {models.Count} models on first page, assuming complete result set");
+                }
+                
                 // Check for duplicate results (API returning same models on multiple pages)
                 var newModelIds = models.Where(m => !string.IsNullOrEmpty(m.Id)).Select(m => m.Id!).ToHashSet();
                 var duplicateCount = newModelIds.Count(id => processedModelIds.Contains(id));
                 
-                if (duplicateCount > 0 && page > 1)
+                _loggingService.Log($"Page {page}: Found {models.Count} models, {duplicateCount} duplicates, {newModelIds.Count} new models");
+                
+                // Stop if we're getting mostly duplicates (API pagination issue)
+                if (page > 1 && duplicateCount >= models.Count * 0.8) // 80% or more duplicates
                 {
-                    _loggingService.Log($"Detected {duplicateCount} duplicate models on page {page}, stopping pagination to avoid infinite loop");
+                    _loggingService.Log($"Detected {duplicateCount}/{models.Count} duplicate models on page {page}, stopping pagination to avoid infinite loop", LogLevel.Warning);
                     break;
                 }
                 
-                // Check if we're getting the same models repeatedly (API pagination issue)
+                // Stop if we're getting the exact same models repeatedly
                 if (page > 1 && models.Count == newModelIds.Count && duplicateCount == models.Count)
                 {
                     _loggingService.Log($"API is returning the same {models.Count} models repeatedly, stopping pagination", LogLevel.Warning);
@@ -304,6 +313,13 @@ public class HuggingFaceModelService
                 
                 // Add delay to be respectful to the API
                 await Task.Delay(100);
+                
+                // If we processed all models from the first page and there are no more unique models, stop
+                if (page == 1 && processedModelIds.Count >= models.Count)
+                {
+                    _loggingService.Log($"Processed all {processedModelIds.Count} unique models from first page, stopping pagination");
+                    break;
+                }
             }
             
             _loggingService.Log($"=== REPOSITORY SCAN COMPLETE ===");
