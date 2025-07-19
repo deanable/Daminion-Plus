@@ -117,10 +117,11 @@ public partial class MainForm : Form
         
         if (System.IO.Directory.Exists(modelsDirectory))
         {
-            var modelFiles = System.IO.Directory.GetFiles(modelsDirectory, "*.onnx");
-            _loggingService.Log($"Found {modelFiles.Length} ONNX model files: {string.Join(", ", modelFiles.Select(Path.GetFileName))}");
+            // First, look for models in the root directory (legacy models)
+            var rootModelFiles = System.IO.Directory.GetFiles(modelsDirectory, "*.onnx");
+            _loggingService.Log($"Found {rootModelFiles.Length} ONNX model files in root: {string.Join(", ", rootModelFiles.Select(Path.GetFileName))}");
             
-            foreach (var modelFile in modelFiles)
+            foreach (var modelFile in rootModelFiles)
             {
                 var modelName = Path.GetFileNameWithoutExtension(modelFile);
                 
@@ -165,6 +166,50 @@ public partial class MainForm : Form
                 else
                 {
                     _loggingService.Log($"No labels file found for model: {modelName}. Tried: {string.Join(", ", possibleLabelFiles)}");
+                }
+            }
+            
+            // Then, look for models in subdirectories (downloaded Hugging Face models)
+            var subdirectories = System.IO.Directory.GetDirectories(modelsDirectory);
+            _loggingService.Log($"Found {subdirectories.Length} subdirectories: {string.Join(", ", subdirectories.Select(Path.GetFileName))}");
+            
+            foreach (var subdirectory in subdirectories)
+            {
+                var subdirModelFiles = System.IO.Directory.GetFiles(subdirectory, "*.onnx");
+                if (subdirModelFiles.Length > 0)
+                {
+                    var modelFile = subdirModelFiles[0]; // Use the first ONNX file found
+                    var modelName = Path.GetFileNameWithoutExtension(modelFile);
+                    var subdirName = Path.GetFileName(subdirectory);
+                    
+                    _loggingService.Log($"Checking subdirectory model: {subdirName}, ONNX file: {modelName}");
+                    
+                    // Look for labels file in the subdirectory
+                    var subdirLabelFiles = System.IO.Directory.GetFiles(subdirectory, "*.txt");
+                    string? labelsFile = subdirLabelFiles.FirstOrDefault();
+                    
+                    if (!string.IsNullOrEmpty(labelsFile))
+                    {
+                        try
+                        {
+                            var service = new MLNetTaggingService(
+                                _loggingService,
+                                modelFile,
+                                labelsFile,
+                                maxTags: _settings.Model.MaxTags,
+                                confidenceThreshold: _settings.Model.ConfidenceThreshold);
+                            services.Add(service);
+                            _loggingService.Log($"Successfully added ML.NET service for subdirectory model: {subdirName}");
+                        }
+                        catch (Exception ex)
+                        {
+                            _loggingService.LogException(ex, $"Failed to create ML.NET service for subdirectory model: {subdirName}");
+                        }
+                    }
+                    else
+                    {
+                        _loggingService.Log($"No labels file found for subdirectory model: {subdirName}");
+                    }
                 }
             }
         }
@@ -535,6 +580,10 @@ public partial class MainForm : Form
         try
         {
             _loggingService.Log("Refreshing model list...");
+            
+            // Reinitialize tagging services to include newly downloaded models
+            _taggingServices.Clear();
+            _taggingServices.AddRange(InitializeTaggingServices());
             
             // Get models from the registry
             var registryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "model_registry.json");
