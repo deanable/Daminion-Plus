@@ -46,7 +46,10 @@ public partial class MainForm : Form
         _settings = LoadConfiguration();
         
         // Initialize services
-        _loggingService = new FileLoggingService();
+        var logLevel = Enum.TryParse<LogLevel>(_settings.Logging.LogLevel, out var parsedLevel) ? parsedLevel : LogLevel.Info;
+        _loggingService = new FileLoggingService(
+            minimumLogLevel: logLevel,
+            logToConsole: _settings.Logging.LogToConsole);
         _metadataService = new MetadataService(_loggingService, _settings.Metadata.CreateBackups, _settings.Metadata.SupportedFormats);
         
         // Initialize tagging services
@@ -92,14 +95,6 @@ public partial class MainForm : Form
     {
         var services = new List<IImageTaggingService>();
 
-        // Add ML.NET service
-        services.Add(new MLNetTaggingService(
-            _loggingService,
-            _settings.Model.ModelPath,
-            _settings.Model.LabelsPath,
-            maxTags: _settings.Model.MaxTags,
-            confidenceThreshold: _settings.Model.ConfidenceThreshold));
-
         // Add Cloud API service
         services.Add(new CloudApiTaggingService(
             _loggingService,
@@ -107,39 +102,91 @@ public partial class MainForm : Form
             _settings.CloudApi.ApiKey,
             _settings.CloudApi.TimeoutSeconds));
 
+        // Add ML.NET services for each available model
+        var modelsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
+        _loggingService.Log($"Checking for models in directory: {modelsDirectory}");
+        
+        if (System.IO.Directory.Exists(modelsDirectory))
+        {
+            var modelFiles = System.IO.Directory.GetFiles(modelsDirectory, "*.onnx");
+            _loggingService.Log($"Found {modelFiles.Length} ONNX model files: {string.Join(", ", modelFiles.Select(Path.GetFileName))}");
+            
+            foreach (var modelFile in modelFiles)
+            {
+                var modelName = Path.GetFileNameWithoutExtension(modelFile);
+                
+                // Try different label file naming patterns
+                var possibleLabelFiles = new[]
+                {
+                    Path.Combine(modelsDirectory, $"{modelName}_classes.txt"),
+                    Path.Combine(modelsDirectory, "imagenet_classes.txt"),
+                    Path.Combine(modelsDirectory, "synset.txt")
+                };
+                
+                string? labelsFile = null;
+                foreach (var labelFile in possibleLabelFiles)
+                {
+                    if (File.Exists(labelFile))
+                    {
+                        labelsFile = labelFile;
+                        break;
+                    }
+                }
+                
+                _loggingService.Log($"Checking model: {modelName}, found labels file: {labelsFile ?? "None"}");
+                
+                if (!string.IsNullOrEmpty(labelsFile))
+                {
+                    try
+                    {
+                        var service = new MLNetTaggingService(
+                            _loggingService,
+                            modelFile,
+                            labelsFile,
+                            maxTags: _settings.Model.MaxTags,
+                            confidenceThreshold: _settings.Model.ConfidenceThreshold);
+                        services.Add(service);
+                        _loggingService.Log($"Successfully added ML.NET service for model: {modelName}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _loggingService.LogException(ex, $"Failed to create ML.NET service for model: {modelName}");
+                    }
+                }
+                else
+                {
+                    _loggingService.Log($"No labels file found for model: {modelName}. Tried: {string.Join(", ", possibleLabelFiles)}");
+                }
+            }
+        }
+        else
+        {
+            _loggingService.Log($"Models directory does not exist: {modelsDirectory}");
+        }
+
+        _loggingService.Log($"Total tagging services initialized: {services.Count}");
         return services;
     }
 
     private void InitializeUI()
     {
         comboBoxTagMethod.Items.Clear();
+        _loggingService.Log($"Initializing UI with {_taggingServices.Count} tagging services");
+        
         foreach (var service in _taggingServices)
         {
+            _loggingService.Log($"Adding service to dropdown: {service.ServiceName}");
             comboBoxTagMethod.Items.Add(service.ServiceName);
         }
-        comboBoxTagMethod.SelectedIndex = 0;
         
-        // Add progress bar and status label if they don't exist
-        if (!Controls.Contains(progressBar))
+        if (comboBoxTagMethod.Items.Count > 0)
         {
-            progressBar = new ProgressBar
-            {
-                Location = new Point(12, 300),
-                Size = new Size(400, 23),
-                Visible = false
-            };
-            Controls.Add(progressBar);
+            comboBoxTagMethod.SelectedIndex = 0;
+            _loggingService.Log($"Selected service: {comboBoxTagMethod.SelectedItem}");
         }
-
-        if (!Controls.Contains(lblStatus))
+        else
         {
-            lblStatus = new Label
-            {
-                Location = new Point(12, 330),
-                Size = new Size(400, 20),
-                Text = "Ready"
-            };
-            Controls.Add(lblStatus);
+            _loggingService.Log("No services available for selection");
         }
     }
 
@@ -386,9 +433,69 @@ public partial class MainForm : Form
         }
     }
 
+    private void btnManageModels_Click(object sender, EventArgs e)
+    {
+        try
+        {
+            var modelsForm = new ModelsForm(_loggingService);
+            modelsForm.ShowDialog(this);
+            
+            // Refresh the model list after the dialog closes
+            RefreshModelList();
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "Manage Models");
+            MessageBox.Show($"Error opening model manager: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void RefreshModelList()
+    {
+        try
+        {
+                    // Get available models from the models directory
+        var modelsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
+        if (!System.IO.Directory.Exists(modelsDirectory))
+            return;
+
+        var modelFiles = System.IO.Directory.GetFiles(modelsDirectory, "*.onnx");
+            var availableModels = new List<string>();
+
+            foreach (var modelFile in modelFiles)
+            {
+                var modelName = Path.GetFileNameWithoutExtension(modelFile);
+                var labelsFile = Path.Combine(modelsDirectory, $"{modelName}_classes.txt");
+                
+                if (File.Exists(labelsFile))
+                {
+                    availableModels.Add($"ML.NET ({modelName})");
+                }
+            }
+
+            // Update the combo box
+            comboBoxTagMethod.Items.Clear();
+            comboBoxTagMethod.Items.Add("Cloud API");
+            foreach (var model in availableModels)
+            {
+                comboBoxTagMethod.Items.Add(model);
+            }
+            
+            if (comboBoxTagMethod.Items.Count > 0)
+                comboBoxTagMethod.SelectedIndex = 0;
+
+            _loggingService.Log($"Refreshed model list: {availableModels.Count} local models available");
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "Refresh Model List");
+        }
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         _loggingService.Log("Application closing");
+        _loggingService.Log("===== SESSION END =====");
         base.OnFormClosing(e);
     }
 }

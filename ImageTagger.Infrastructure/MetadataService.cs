@@ -56,7 +56,15 @@ public class MetadataService : IMetadataService
                         // Remove backup on success
                         if (backupPath != null && File.Exists(backupPath))
                         {
-                            try { File.Delete(backupPath); } catch { }
+                            try 
+                            { 
+                                File.Delete(backupPath); 
+                                _loggingService.LogVerbose("Backup file removed successfully");
+                            } 
+                            catch (Exception ex) 
+                            { 
+                                _loggingService.LogException(ex, "Remove Backup File");
+                            }
                         }
                         
                         return true;
@@ -66,7 +74,15 @@ public class MetadataService : IMetadataService
                         // Restore backup on failure
                         if (backupPath != null && File.Exists(backupPath))
                         {
-                            try { File.Copy(backupPath, imagePath, true); } catch { }
+                            try 
+                            { 
+                                File.Copy(backupPath, imagePath, true); 
+                                _loggingService.LogVerbose("Backup file restored due to failure");
+                            } 
+                            catch (Exception ex) 
+                            { 
+                                _loggingService.LogException(ex, "Restore Backup File");
+                            }
                             _loggingService.Log($"Failed to write tags, restored backup", LogLevel.Warning);
                         }
                         
@@ -78,7 +94,15 @@ public class MetadataService : IMetadataService
                     // Restore backup on exception
                     if (backupPath != null && File.Exists(backupPath))
                     {
-                        try { File.Copy(backupPath, imagePath, true); } catch { }
+                        try 
+                        { 
+                            File.Copy(backupPath, imagePath, true); 
+                            _loggingService.LogVerbose("Backup file restored due to exception");
+                        } 
+                        catch (Exception backupEx) 
+                        { 
+                            _loggingService.LogException(backupEx, "Restore Backup File After Exception");
+                        }
                         _loggingService.Log($"Exception during metadata writing, restored backup", LogLevel.Error);
                     }
                     
@@ -164,9 +188,10 @@ public class MetadataService : IMetadataService
                 {
                     imageInfo.Tags = ReadTagsAsync(imagePath, cancellationToken).Result;
                 }
-                catch
+                catch (Exception tagEx)
                 {
-                    // Ignore tag reading errors
+                    _loggingService.LogException(tagEx, "Read Tags in GetImageInfoAsync");
+                    imageInfo.Tags = new List<string>();
                 }
 
                 return imageInfo;

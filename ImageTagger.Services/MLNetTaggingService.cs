@@ -17,7 +17,7 @@ public class MLNetTaggingService : IImageTaggingService
     private readonly int _maxTags;
     private readonly double _confidenceThreshold;
 
-    public string ServiceName => "ML.NET (Local)";
+    public string ServiceName => $"ML.NET ({Path.GetFileNameWithoutExtension(_modelPath)})";
 
     public MLNetTaggingService(
         ILoggingService loggingService,
@@ -50,6 +50,10 @@ public class MLNetTaggingService : IImageTaggingService
         try
         {
             _loggingService.Log($"Starting ML.NET tagging for {imagePath}");
+            _loggingService.LogVerbose($"Model path: {_modelPath}");
+            _loggingService.LogVerbose($"Labels path: {_labelsPath}");
+            _loggingService.LogVerbose($"Image dimensions: {_imageWidth}x{_imageHeight}");
+            _loggingService.LogVerbose($"Max tags: {_maxTags}, Confidence threshold: {_confidenceThreshold}");
 
             // Verify model and labels exist
             if (!File.Exists(_modelPath))
@@ -72,7 +76,9 @@ public class MLNetTaggingService : IImageTaggingService
             _loggingService.Log($"Loaded {labels.Length} labels", LogLevel.Debug);
 
             // Run ML.NET inference
+            _loggingService.LogVerbose("Starting ML.NET inference pipeline");
             var predictions = await Task.Run(() => RunMLNetInference(imagePath, labels), cancellationToken);
+            _loggingService.LogVerbose($"ML.NET inference completed, got {predictions.Count} predictions");
 
             // Convert to TagResult objects
             result.Tags = predictions
@@ -148,17 +154,61 @@ public class MLNetTaggingService : IImageTaggingService
         var predictionEngine = mlContext.Model.CreatePredictionEngine<ImageInput, ImagePrediction>(model);
         var prediction = predictionEngine.Predict(new ImageInput { ImagePath = imagePath });
 
-        if (prediction.PredictedLabels == null || prediction.PredictedLabels.Length == 0)
+        // Debug logging
+        _loggingService.LogVerbose($"Prediction object type: {prediction.GetType().Name}");
+        _loggingService.LogVerbose($"PredictedLabels is null: {prediction.PredictedLabels == null}");
+        _loggingService.LogVerbose($"PredictedLabels length: {prediction.PredictedLabels?.Length ?? 0}");
+
+        if (prediction.PredictedLabels == null)
         {
-            throw new ApplicationException($"Model did not return any predictions. Output column: {outputColumnName}.");
+            throw new ApplicationException($"Model prediction is null. Output column: {outputColumnName}.");
+        }
+
+        if (prediction.PredictedLabels.Length == 0)
+        {
+            // Try to get the raw prediction data using reflection to debug
+            var predictionType = prediction.GetType();
+            var properties = predictionType.GetProperties();
+            _loggingService.LogVerbose($"Prediction properties: {string.Join(", ", properties.Select(p => $"{p.Name}:{p.PropertyType.Name}"))}");
+            
+            foreach (var prop in properties)
+            {
+                try
+                {
+                    var value = prop.GetValue(prediction);
+                    if (value is Array arr)
+                    {
+                        _loggingService.LogVerbose($"Property {prop.Name} is array with length: {arr.Length}");
+                        if (arr.Length > 0)
+                        {
+                            _loggingService.LogVerbose($"First few values: {string.Join(", ", arr.Cast<object>().Take(5))}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogVerbose($"Error reading property {prop.Name}: {ex.Message}");
+                }
+            }
+            
+            throw new ApplicationException($"Model returned empty predictions. Output column: {outputColumnName}.");
+        }
+
+        if (prediction.PredictedLabels.Length != labels.Length)
+        {
+            _loggingService.Log($"Warning: Prediction length ({prediction.PredictedLabels.Length}) doesn't match labels length ({labels.Length})", LogLevel.Warning);
         }
 
         // Get top predictions with confidence scores
-        return prediction.PredictedLabels
-            .Select((score, index) => (Label: labels[index], Score: (double)score))
+        var predictions = prediction.PredictedLabels
+            .Select((score, index) => (Label: index < labels.Length ? labels[index] : $"Unknown_{index}", Score: (double)score))
             .OrderByDescending(x => x.Score)
             .Take(_maxTags)
             .ToList();
+
+        _loggingService.LogVerbose($"Generated {predictions.Count} predictions with scores: {string.Join(", ", predictions.Select(p => $"{p.Label}:{p.Score:F3}"))}");
+
+        return predictions;
     }
 
     private string GetOnnxOutputColumnName(string modelPath)
@@ -184,6 +234,7 @@ public class MLNetTaggingService : IImageTaggingService
 
     private class ImagePrediction
     {
+        [ColumnName("resnetv17_dense0_fwd")]
         public float[] PredictedLabels { get; set; } = Array.Empty<float>();
     }
 } 
