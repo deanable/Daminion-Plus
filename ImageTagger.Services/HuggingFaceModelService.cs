@@ -166,7 +166,8 @@ public class HuggingFaceModelService
                     $"limit={pageSize}",
                     $"offset={pageSize * (page - 1)}",
                     "sort=downloads",
-                    "direction=-1"
+                    "direction=-1",
+                    "pipeline_tag=image-classification" // Restrict to image classification models
                 };
                 
                 // Build search query - prioritize user search terms, avoid overly restrictive combinations
