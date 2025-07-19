@@ -151,17 +151,30 @@ public partial class ModelManagementForm : Form
 
     private ModelFilterOptions GetFilterOptions()
     {
+        // Get license selection from combobox
+        var licenseText = comboBoxLicenses.SelectedItem?.ToString() ?? "Apache 2.0, MIT, BSD";
+        var licenses = licenseText switch
+        {
+            "All Licenses" => new string[0],
+            "Apache 2.0" => new[] { "apache-2.0" },
+            "MIT" => new[] { "mit" },
+            "BSD" => new[] { "bsd" },
+            "GPL" => new[] { "gpl" },
+            "Apache 2.0, MIT, BSD" => new[] { "apache-2.0", "mit", "bsd" },
+            _ => new string[0]
+        };
+
         return new ModelFilterOptions
         {
-            MinDownloads = int.TryParse(textBoxMinDownloads.Text, out var min) ? min : 100,
-            MaxModelSizeMB = int.TryParse(textBoxMaxSize.Text, out var max) ? max : 500,
-            MinLikes = int.TryParse(textBoxMinLikes.Text, out var likes) ? likes : 0,
-            MaxModels = int.TryParse(textBoxMaxModels.Text, out var maxModels) ? maxModels : 100,
+            MinDownloads = trackBarMinDownloads.Value,
+            MaxModelSizeMB = trackBarMaxSize.Value,
+            MinLikes = trackBarMinLikes.Value,
+            MaxModels = trackBarMaxModels.Value,
             ExcludeArchived = checkBoxExcludeArchived.Checked,
             ExcludePrivate = checkBoxExcludePrivate.Checked,
             OnlyVerified = checkBoxOnlyVerified.Checked,
             PreferImageNetLabels = checkBoxPreferImageNet.Checked,
-            Licenses = textBoxLicenses.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray(),
+            Licenses = licenses,
             SearchTerms = textBoxSearchTerms.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray(),
             SupportedFormats = new[] { "onnx" },
             TaskCategories = new[] { "image-classification", "computer-vision" },
@@ -180,18 +193,25 @@ public partial class ModelManagementForm : Form
             var license = model.License?.ToLowerInvariant() ?? "";
 
             // Check downloads
-            var minDownloads = int.TryParse(textBoxMinDownloads.Text, out var min) ? min : 100;
-            if (downloads is int d && d < minDownloads) return false;
+            if (downloads is int d && d < trackBarMinDownloads.Value) return false;
 
             // Check likes
-            var minLikes = int.TryParse(textBoxMinLikes.Text, out var minL) ? minL : 0;
-            if (likes is int l && l < minLikes) return false;
+            if (likes is int l && l < trackBarMinLikes.Value) return false;
 
             // Check license
-            var licenseFilter = textBoxLicenses.Text?.ToLowerInvariant() ?? "";
-            if (!string.IsNullOrEmpty(licenseFilter) && !string.IsNullOrEmpty(license))
+            var licenseText = comboBoxLicenses.SelectedItem?.ToString() ?? "Apache 2.0, MIT, BSD";
+            if (licenseText != "All Licenses" && !string.IsNullOrEmpty(license))
             {
-                var allowedLicenses = licenseFilter.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim());
+                var allowedLicenses = licenseText switch
+                {
+                    "Apache 2.0" => new[] { "apache-2.0" },
+                    "MIT" => new[] { "mit" },
+                    "BSD" => new[] { "bsd" },
+                    "GPL" => new[] { "gpl" },
+                    "Apache 2.0, MIT, BSD" => new[] { "apache-2.0", "mit", "bsd" },
+                    _ => new string[0]
+                };
+                
                 if (!allowedLicenses.Any(l => license.Contains(l))) return false;
             }
 
@@ -201,19 +221,19 @@ public partial class ModelManagementForm : Form
         UpdateRepositoryModelsList();
     }
 
-    private void ClearRepositoryFilters()
+        private void ClearRepositoryFilters()
     {
-        textBoxMinDownloads.Text = "100";
-        textBoxMaxSize.Text = "500";
-        textBoxMinLikes.Text = "0";
-        textBoxMaxModels.Text = "100";
-        textBoxLicenses.Text = "apache-2.0,mit,bsd";
+        trackBarMinDownloads.Value = 100;
+        trackBarMaxSize.Value = 500;
+        trackBarMinLikes.Value = 0;
+        trackBarMaxModels.Value = 100;
+        comboBoxLicenses.SelectedIndex = 5; // "Apache 2.0, MIT, BSD"
         textBoxSearchTerms.Text = "resnet,imagenet,classification";
         checkBoxExcludeArchived.Checked = true;
         checkBoxExcludePrivate.Checked = true;
         checkBoxOnlyVerified.Checked = false;
         checkBoxPreferImageNet.Checked = true;
-
+        
         ApplyRepositoryFilters();
     }
 
@@ -505,12 +525,16 @@ public partial class ModelManagementForm : Form
         this.label3 = new Label();
         this.labelRepositoryStatus = new Label();
         this.labelRepositoryFilters = new Label();
-        this.textBoxMinDownloads = new TextBox();
-        this.textBoxMaxSize = new TextBox();
-        this.textBoxMinLikes = new TextBox();
-        this.textBoxMaxModels = new TextBox();
-        this.textBoxLicenses = new TextBox();
+        this.trackBarMinDownloads = new TrackBar();
+        this.trackBarMaxSize = new TrackBar();
+        this.trackBarMinLikes = new TrackBar();
+        this.trackBarMaxModels = new TrackBar();
+        this.comboBoxLicenses = new ComboBox();
         this.textBoxSearchTerms = new TextBox();
+        this.labelMinDownloadsValue = new Label();
+        this.labelMaxSizeValue = new Label();
+        this.labelMinLikesValue = new Label();
+        this.labelMaxModelsValue = new Label();
         this.checkBoxExcludeArchived = new CheckBox();
         this.checkBoxExcludePrivate = new CheckBox();
         this.checkBoxOnlyVerified = new CheckBox();
@@ -629,53 +653,53 @@ public partial class ModelManagementForm : Form
         this.labelRepositoryFilters.Size = new Size(120, 20);
         this.labelRepositoryFilters.Font = new Font(Font.FontFamily, 10, FontStyle.Bold);
         
-        // Filter Controls
-        CreateFilterControl(this.tabPageRepository, "Min Downloads:", "textBoxMinDownloads", "100", 12, 35);
-        CreateFilterControl(this.tabPageRepository, "Max Size (MB):", "textBoxMaxSize", "500", 12, 65);
-        CreateFilterControl(this.tabPageRepository, "Min Likes:", "textBoxMinLikes", "0", 12, 95);
-        CreateFilterControl(this.tabPageRepository, "Max Models:", "textBoxMaxModels", "100", 12, 125);
-        CreateFilterControl(this.tabPageRepository, "Licenses:", "textBoxLicenses", "apache-2.0,mit,bsd", 12, 155);
-        CreateFilterControl(this.tabPageRepository, "Search Terms:", "textBoxSearchTerms", "resnet,imagenet,classification", 12, 185);
+        // Filter Controls with proper spacing
+        CreateTrackBarControl(this.tabPageRepository, "Min Downloads:", trackBarMinDownloads, labelMinDownloadsValue, 100, 1000, 100, 12, 35);
+        CreateTrackBarControl(this.tabPageRepository, "Max Size (MB):", trackBarMaxSize, labelMaxSizeValue, 100, 1000, 500, 12, 85);
+        CreateTrackBarControl(this.tabPageRepository, "Min Likes:", trackBarMinLikes, labelMinLikesValue, 0, 1000, 0, 12, 135);
+        CreateTrackBarControl(this.tabPageRepository, "Max Models:", trackBarMaxModels, labelMaxModelsValue, 10, 500, 100, 12, 185);
+        CreateLicenseComboBox(this.tabPageRepository, "Licenses:", comboBoxLicenses, 12, 235);
+        CreateSearchTermsControl(this.tabPageRepository, "Search Terms:", textBoxSearchTerms, "resnet,imagenet,classification", 12, 285);
         
-        // Checkboxes
-        CreateCheckbox(this.tabPageRepository, "Exclude Archived", "checkBoxExcludeArchived", true, 12, 215);
-        CreateCheckbox(this.tabPageRepository, "Exclude Private", "checkBoxExcludePrivate", true, 12, 235);
-        CreateCheckbox(this.tabPageRepository, "Only Verified", "checkBoxOnlyVerified", false, 12, 255);
-        CreateCheckbox(this.tabPageRepository, "Prefer ImageNet Labels", "checkBoxPreferImageNet", true, 12, 275);
+        // Checkboxes with better spacing
+        CreateCheckbox(this.tabPageRepository, "Exclude Archived", "checkBoxExcludeArchived", true, 12, 335);
+        CreateCheckbox(this.tabPageRepository, "Exclude Private", "checkBoxExcludePrivate", true, 12, 355);
+        CreateCheckbox(this.tabPageRepository, "Only Verified", "checkBoxOnlyVerified", false, 12, 375);
+        CreateCheckbox(this.tabPageRepository, "Prefer ImageNet Labels", "checkBoxPreferImageNet", true, 12, 395);
         
-        // Filter Buttons
+        // Filter Buttons with better spacing
         this.buttonApplyFilters.Text = "Apply Filters";
-        this.buttonApplyFilters.Location = new Point(12, 305);
+        this.buttonApplyFilters.Location = new Point(12, 425);
         this.buttonApplyFilters.Size = new Size(100, 30);
         this.buttonApplyFilters.BackColor = Color.LightGreen;
         this.buttonApplyFilters.Click += (s, e) => ApplyRepositoryFilters();
         
         this.buttonClearFilters.Text = "Clear Filters";
-        this.buttonClearFilters.Location = new Point(120, 305);
+        this.buttonClearFilters.Location = new Point(120, 425);
         this.buttonClearFilters.Size = new Size(100, 30);
         this.buttonClearFilters.BackColor = Color.LightCoral;
         this.buttonClearFilters.Click += (s, e) => ClearRepositoryFilters();
         
         // Scan Button
         this.buttonScanRepository.Text = "🔍 Scan Repository";
-        this.buttonScanRepository.Location = new Point(230, 305);
+        this.buttonScanRepository.Location = new Point(230, 425);
         this.buttonScanRepository.Size = new Size(140, 30);
         this.buttonScanRepository.BackColor = Color.LightBlue;
         this.buttonScanRepository.Click += buttonScanRepository_Click;
         
         // Progress Bar
-        this.progressBarRepository.Location = new Point(380, 305);
+        this.progressBarRepository.Location = new Point(380, 425);
         this.progressBarRepository.Size = new Size(200, 30);
         this.progressBarRepository.Visible = false;
         
         // Status Label
         this.labelRepositoryStatus.Text = "Ready to scan repository";
-        this.labelRepositoryStatus.Location = new Point(590, 310);
+        this.labelRepositoryStatus.Location = new Point(590, 430);
         this.labelRepositoryStatus.Size = new Size(200, 20);
         
         // Repository Models ListView
-        this.listViewRepositoryModels.Location = new Point(12, 350);
-        this.listViewRepositoryModels.Size = new Size(1140, 350);
+        this.listViewRepositoryModels.Location = new Point(12, 470);
+        this.listViewRepositoryModels.Size = new Size(1140, 230);
         this.listViewRepositoryModels.View = View.Details;
         this.listViewRepositoryModels.FullRowSelect = true;
         this.listViewRepositoryModels.GridLines = true;
@@ -697,8 +721,9 @@ public partial class ModelManagementForm : Form
         // Add controls to Repository Browser tab
         this.tabPageRepository.Controls.AddRange(new Control[] {
             this.labelRepositoryFilters, this.labelRepositoryStatus,
-            this.textBoxMinDownloads, this.textBoxMaxSize, this.textBoxMinLikes, this.textBoxMaxModels,
-            this.textBoxLicenses, this.textBoxSearchTerms,
+            this.trackBarMinDownloads, this.trackBarMaxSize, this.trackBarMinLikes, this.trackBarMaxModels,
+            this.comboBoxLicenses, this.textBoxSearchTerms,
+            this.labelMinDownloadsValue, this.labelMaxSizeValue, this.labelMinLikesValue, this.labelMaxModelsValue,
             this.checkBoxExcludeArchived, this.checkBoxExcludePrivate, this.checkBoxOnlyVerified, this.checkBoxPreferImageNet,
             this.buttonApplyFilters, this.buttonClearFilters, this.buttonScanRepository,
             this.progressBarRepository, this.listViewRepositoryModels, this.buttonDownloadRepositoryModel
@@ -711,18 +736,64 @@ public partial class ModelManagementForm : Form
         this.PerformLayout();
     }
 
-    private void CreateFilterControl(Control parent, string labelText, string controlName, string defaultValue, int x, int y)
+    private void CreateTrackBarControl(Control parent, string labelText, TrackBar trackBar, Label valueLabel, int min, int max, int defaultValue, int x, int y)
     {
+        // Label
         var label = new Label { Text = labelText, Location = new Point(x, y), Size = new Size(120, 20) };
         parent.Controls.Add(label);
 
-        var textBox = new TextBox
-        {
-            Name = controlName,
-            Text = defaultValue,
-            Location = new Point(x + 130, y),
-            Size = new Size(150, 20)
-        };
+        // TrackBar
+        trackBar.Minimum = min;
+        trackBar.Maximum = max;
+        trackBar.Value = defaultValue;
+        trackBar.Location = new Point(x + 130, y);
+        trackBar.Size = new Size(200, 45);
+        trackBar.TickFrequency = (max - min) / 10;
+        trackBar.TickStyle = TickStyle.BottomRight;
+        trackBar.ValueChanged += (s, e) => valueLabel.Text = trackBar.Value.ToString();
+        parent.Controls.Add(trackBar);
+
+        // Value Label
+        valueLabel.Text = defaultValue.ToString();
+        valueLabel.Location = new Point(x + 340, y + 10);
+        valueLabel.Size = new Size(50, 20);
+        valueLabel.Font = new Font(Font.FontFamily, 9, FontStyle.Bold);
+        parent.Controls.Add(valueLabel);
+    }
+
+    private void CreateLicenseComboBox(Control parent, string labelText, ComboBox comboBox, int x, int y)
+    {
+        // Label
+        var label = new Label { Text = labelText, Location = new Point(x, y), Size = new Size(120, 20) };
+        parent.Controls.Add(label);
+
+        // ComboBox
+        comboBox.Location = new Point(x + 130, y);
+        comboBox.Size = new Size(200, 25);
+        comboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        comboBox.Items.AddRange(new object[] {
+            "All Licenses",
+            "Apache 2.0",
+            "MIT",
+            "BSD",
+            "GPL",
+            "Apache 2.0, MIT, BSD"
+        });
+        comboBox.SelectedIndex = 5; // Default to "Apache 2.0, MIT, BSD"
+        parent.Controls.Add(comboBox);
+    }
+
+    private void CreateSearchTermsControl(Control parent, string labelText, TextBox textBox, string defaultValue, int x, int y)
+    {
+        // Label
+        var label = new Label { Text = labelText, Location = new Point(x, y), Size = new Size(120, 20) };
+        parent.Controls.Add(label);
+
+        // TextBox
+        textBox.Text = defaultValue;
+        textBox.Location = new Point(x + 130, y);
+        textBox.Size = new Size(200, 20);
+        textBox.PlaceholderText = "Enter search terms separated by commas";
         parent.Controls.Add(textBox);
     }
 
@@ -758,12 +829,16 @@ public partial class ModelManagementForm : Form
     private Label label3;
     private Label labelRepositoryStatus;
     private Label labelRepositoryFilters;
-    private TextBox textBoxMinDownloads;
-    private TextBox textBoxMaxSize;
-    private TextBox textBoxMinLikes;
-    private TextBox textBoxMaxModels;
-    private TextBox textBoxLicenses;
+    private TrackBar trackBarMinDownloads;
+    private TrackBar trackBarMaxSize;
+    private TrackBar trackBarMinLikes;
+    private TrackBar trackBarMaxModels;
+    private ComboBox comboBoxLicenses;
     private TextBox textBoxSearchTerms;
+    private Label labelMinDownloadsValue;
+    private Label labelMaxSizeValue;
+    private Label labelMinLikesValue;
+    private Label labelMaxModelsValue;
     private CheckBox checkBoxExcludeArchived;
     private CheckBox checkBoxExcludePrivate;
     private CheckBox checkBoxOnlyVerified;
