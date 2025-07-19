@@ -111,10 +111,6 @@ public partial class MainForm : Form
         // Initialize model registry and add ML.NET services
         InitializeModelRegistry();
         
-        // Load the model registry to get proper display names
-        var registryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "model_registry.json");
-        var registry = _modelManager.LoadModelRegistryAsync(registryPath).Result;
-        
         // Add ML.NET services for each available model
         var modelsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
         _loggingService.Log($"Checking for models in directory: {modelsDirectory}");
