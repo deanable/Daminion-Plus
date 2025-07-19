@@ -150,7 +150,7 @@ partial class MainForm
         // MainForm
         // 
         this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-        this.ClientSize = new System.Drawing.Size(800, 460);
+        this.ClientSize = new System.Drawing.Size(950, 460);
         this.Controls.Add(this.btnSelectImage);
         this.Controls.Add(this.pictureBoxPreview);
         this.Controls.Add(this.lblModel);

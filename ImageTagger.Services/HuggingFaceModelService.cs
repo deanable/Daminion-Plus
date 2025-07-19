@@ -90,7 +90,7 @@ public class HuggingFaceModelService
                             ["huggingface_id"] = model.Id ?? "",
                             ["downloads"] = model.Downloads ?? 0,
                             ["likes"] = model.Likes ?? 0,
-                            ["tags"] = model.Tags ?? new List<string>()
+                            ["tags"] = model.Tags?.Where(t => t != null).Select(t => t!).ToList() ?? new List<string>()
                         }
                     };
                     
@@ -110,6 +110,325 @@ public class HuggingFaceModelService
             _loggingService.LogException(ex, "GetAvailableModelsAsync from Hugging Face");
             return new List<ModelInfo>();
         }
+    }
+
+    /// <summary>
+    /// Loads and filters the ENTIRE Hugging Face repository for compatible ONNX models
+    /// </summary>
+    public async Task<List<ModelInfo>> LoadEntireRepositoryAsync(ModelFilterOptions? filterOptions = null)
+    {
+        try
+        {
+            _loggingService.Log("=== LOADING ENTIRE HUGGING FACE REPOSITORY ===");
+            _loggingService.Log("This may take several minutes to scan all available models...");
+            
+            var allModels = new List<ModelInfo>();
+            var page = 0;
+            const int pageSize = 100;
+            var hasMorePages = true;
+            
+            // Apply default filter options if none provided
+            filterOptions ??= new ModelFilterOptions
+            {
+                MinDownloads = 100,
+                MaxModelSizeMB = 500,
+                SupportedFormats = new[] { "onnx" },
+                TaskCategories = new[] { "image-classification", "computer-vision" },
+                ExcludeArchived = true,
+                ExcludePrivate = true,
+                SortBy = "downloads",
+                SortDirection = "desc"
+            };
+            
+            _loggingService.Log($"Filter options: MinDownloads={filterOptions.MinDownloads}, MaxSize={filterOptions.MaxModelSizeMB}MB, Formats={string.Join(",", filterOptions.SupportedFormats)}");
+            
+            while (hasMorePages)
+            {
+                page++;
+                _loggingService.Log($"Scanning page {page}...");
+                
+                var url = $"{HF_API_BASE}/models";
+                var parameters = new List<string>
+                {
+                    $"limit={pageSize}",
+                    $"offset={pageSize * (page - 1)}",
+                    $"sort={filterOptions.SortBy}",
+                    $"direction={filterOptions.SortDirection}"
+                };
+                
+                // Add search filters
+                if (filterOptions.SearchTerms?.Any() == true)
+                {
+                    var searchQuery = string.Join(" ", filterOptions.SearchTerms);
+                    parameters.Add($"search={Uri.EscapeDataString(searchQuery)}");
+                }
+                
+                // Add task category filters
+                if (filterOptions.TaskCategories?.Any() == true)
+                {
+                    foreach (var category in filterOptions.TaskCategories)
+                    {
+                        parameters.Add($"filter=task_categories:{category}");
+                    }
+                }
+                
+                // Add license filters
+                if (filterOptions.Licenses?.Any() == true)
+                {
+                    foreach (var license in filterOptions.Licenses)
+                    {
+                        parameters.Add($"filter=license:{license}");
+                    }
+                }
+                
+                if (parameters.Count > 0)
+                {
+                    url += "?" + string.Join("&", parameters);
+                }
+                
+                _loggingService.LogVerbose($"API URL: {url}");
+                
+                var response = await _httpClient.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _loggingService.Log($"Failed to fetch page {page}: {response.StatusCode}", LogLevel.Warning);
+                    break;
+                }
+                
+                var json = await response.Content.ReadAsStringAsync();
+                var models = JsonSerializer.Deserialize<List<HuggingFaceModel>>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                }) ?? new List<HuggingFaceModel>();
+                
+                if (models.Count == 0)
+                {
+                    hasMorePages = false;
+                    _loggingService.Log($"No more models found on page {page}");
+                    break;
+                }
+                
+                _loggingService.Log($"Found {models.Count} models on page {page}");
+                
+                // Filter and process models
+                foreach (var model in models)
+                {
+                    try
+                    {
+                        // Apply basic filters
+                        if (!ShouldIncludeModel(model, filterOptions))
+                        {
+                            continue;
+                        }
+                        
+                        // Get detailed model info and files
+                        if (string.IsNullOrEmpty(model.Id))
+                        {
+                            continue;
+                        }
+                        var detailedModel = await GetModelInfoAsync(model.Id);
+                        if (detailedModel == null)
+                        {
+                            continue;
+                        }
+                        
+                        // Check if model has compatible files
+                        var modelFiles = await GetModelFilesAsync(model.Id);
+                        if (modelFiles == null || !HasCompatibleFiles(modelFiles, filterOptions))
+                        {
+                            continue;
+                        }
+                        
+                        // Create model info
+                        var modelInfo = CreateModelInfoFromHuggingFaceModel(detailedModel, modelFiles, filterOptions);
+                        if (modelInfo != null)
+                        {
+                            allModels.Add(modelInfo);
+                            _loggingService.LogVerbose($"Added compatible model: {modelInfo.DisplayName} (Downloads: {detailedModel.Downloads})");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _loggingService.LogException(ex, $"Process model {model.Id}");
+                    }
+                }
+                
+                // Check if we should continue based on filter criteria
+                if (filterOptions.MaxModels > 0 && allModels.Count >= filterOptions.MaxModels)
+                {
+                    _loggingService.Log($"Reached maximum models limit: {filterOptions.MaxModels}");
+                    break;
+                }
+                
+                // Add delay to be respectful to the API
+                await Task.Delay(100);
+            }
+            
+            _loggingService.Log($"=== REPOSITORY SCAN COMPLETE ===");
+            _loggingService.Log($"Found {allModels.Count} compatible models out of {page * pageSize} scanned");
+            
+            // Sort by priority and downloads
+            allModels = allModels
+                .OrderByDescending(m => m.Priority)
+                .ThenByDescending(m => m.AdditionalProperties.GetValueOrDefault("downloads", 0))
+                .ToList();
+            
+            return allModels;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "LoadEntireRepositoryAsync");
+            return new List<ModelInfo>();
+        }
+    }
+
+    private bool ShouldIncludeModel(HuggingFaceModel model, ModelFilterOptions filterOptions)
+    {
+        // Check downloads
+        if (model.Downloads < filterOptions.MinDownloads)
+        {
+            return false;
+        }
+        
+        // Check if archived
+        if (filterOptions.ExcludeArchived && model.AdditionalProperties?.GetValueOrDefault("archived", false) is true)
+        {
+            return false;
+        }
+        
+        // Check if private
+        if (filterOptions.ExcludePrivate && model.AdditionalProperties?.GetValueOrDefault("private", false) is true)
+        {
+            return false;
+        }
+        
+        // Check license
+        if (filterOptions.Licenses?.Any() == true && !string.IsNullOrEmpty(model.License))
+        {
+            var hasValidLicense = filterOptions.Licenses.Any(license => 
+                model.License.Contains(license, StringComparison.OrdinalIgnoreCase));
+            if (!hasValidLicense)
+            {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    private bool HasCompatibleFiles(List<string> modelFiles, ModelFilterOptions filterOptions)
+    {
+        // Check if model has any of the supported formats
+        var hasSupportedFormat = filterOptions.SupportedFormats.Any(format =>
+            modelFiles.Any(file => file.EndsWith($".{format}", StringComparison.OrdinalIgnoreCase)));
+        
+        if (!hasSupportedFormat)
+        {
+            return false;
+        }
+        
+        // Check for labels/classes file
+        var hasLabelsFile = modelFiles.Any(file => 
+            file.Contains("labels", StringComparison.OrdinalIgnoreCase) ||
+            file.Contains("classes", StringComparison.OrdinalIgnoreCase) ||
+            file.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
+        
+        return hasLabelsFile;
+    }
+
+    private ModelInfo? CreateModelInfoFromHuggingFaceModel(HuggingFaceModel model, List<string> modelFiles, ModelFilterOptions filterOptions)
+    {
+        try
+        {
+            // Find ONNX file
+            var onnxFile = modelFiles.FirstOrDefault(f => f.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrEmpty(onnxFile))
+            {
+                return null;
+            }
+            
+            // Find labels file
+            var labelsFile = modelFiles.FirstOrDefault(f => 
+                f.Contains("labels", StringComparison.OrdinalIgnoreCase) ||
+                f.Contains("classes", StringComparison.OrdinalIgnoreCase) ||
+                f.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
+            
+            // Calculate priority based on downloads and other factors
+            var priority = CalculateModelPriority(model, modelFiles);
+            
+            var modelInfo = new ModelInfo
+            {
+                Name = model.Id?.Replace("/", "-") ?? model.Id ?? "unknown",
+                DisplayName = model.Id ?? "Unknown Model",
+                Description = model.Description ?? "No description available",
+                Source = "Hugging Face Hub",
+                License = model.License ?? "Unknown",
+                ImageWidth = 224, // Default, can be updated after download
+                ImageHeight = 224,
+                ConfidenceThreshold = 0.1,
+                MaxTags = 5,
+                Priority = priority,
+                IsEnabled = false, // Start disabled until downloaded
+                AdditionalProperties = new Dictionary<string, object>
+                {
+                    ["huggingface_id"] = model.Id ?? "",
+                    ["downloads"] = model.Downloads ?? 0,
+                    ["likes"] = model.Likes ?? 0,
+                    ["tags"] = model.Tags ?? new List<string>(),
+                    ["onnx_file"] = onnxFile,
+                    ["labels_file"] = labelsFile ?? "",
+                    ["model_files"] = modelFiles,
+                    ["last_updated"] = model.AdditionalProperties?.GetValueOrDefault("last_modified", DateTime.UtcNow) ?? DateTime.UtcNow,
+                    ["author"] = model.AdditionalProperties?.GetValueOrDefault("author", "") ?? "",
+                    ["verified"] = model.AdditionalProperties?.GetValueOrDefault("verified", false) ?? false
+                }
+            };
+            
+            return modelInfo;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, $"CreateModelInfoFromHuggingFaceModel {model.Id}");
+            return null;
+        }
+    }
+
+    private int CalculateModelPriority(HuggingFaceModel model, List<string> modelFiles)
+    {
+        var priority = 50; // Base priority
+        
+        // Boost by downloads
+        var downloads = model.Downloads ?? 0;
+        if (downloads > 10000) priority += 30;
+        else if (downloads > 1000) priority += 20;
+        else if (downloads > 100) priority += 10;
+        
+        // Boost by likes
+        var likes = model.Likes ?? 0;
+        if (likes > 100) priority += 15;
+        else if (likes > 10) priority += 10;
+        
+        // Boost by verification
+        if (model.AdditionalProperties?.GetValueOrDefault("verified", false) is true)
+        {
+            priority += 20;
+        }
+        
+        // Boost by recent updates
+        if (model.AdditionalProperties?.GetValueOrDefault("last_modified", DateTime.MinValue) is DateTime lastModified)
+        {
+            var daysSinceUpdate = (DateTime.UtcNow - lastModified).TotalDays;
+            if (daysSinceUpdate < 30) priority += 10;
+            else if (daysSinceUpdate < 90) priority += 5;
+        }
+        
+        // Boost by having good labels file
+        var hasGoodLabels = modelFiles.Any(f => 
+            f.Contains("imagenet", StringComparison.OrdinalIgnoreCase) ||
+            f.Contains("classes", StringComparison.OrdinalIgnoreCase));
+        if (hasGoodLabels) priority += 15;
+        
+        return priority;
     }
 
     public async Task<bool> DownloadModelAsync(string modelId, string? customPath = null)
@@ -359,6 +678,7 @@ public class HuggingFaceModelService
         public int? Downloads { get; set; }
         public int? Likes { get; set; }
         public List<string>? Tags { get; set; }
+        public Dictionary<string, object> AdditionalProperties { get; set; } = new();
     }
 
     private class HuggingFaceFile

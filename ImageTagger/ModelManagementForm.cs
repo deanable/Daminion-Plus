@@ -9,8 +9,12 @@ public partial class ModelManagementForm : Form
 {
     private readonly IModelManager _modelManager;
     private readonly ModelDownloaderService _modelDownloader;
+    private readonly HuggingFaceModelService _hfService;
     private readonly ILoggingService _loggingService;
     private ModelRegistry? _currentRegistry;
+    private List<ModelInfo> _allRepositoryModels = new();
+    private List<ModelInfo> _filteredRepositoryModels = new();
+    private bool _isScanning = false;
 
     public ModelManagementForm(ILoggingService loggingService)
     {
@@ -18,6 +22,7 @@ public partial class ModelManagementForm : Form
         _loggingService = loggingService;
         _modelManager = new ModelManager(loggingService);
         _modelDownloader = new ModelDownloaderService(loggingService);
+        _hfService = new HuggingFaceModelService(loggingService);
         
         LoadModelsAsync();
     }
@@ -31,7 +36,7 @@ public partial class ModelManagementForm : Form
             // Load current registry
             _currentRegistry = await _modelManager.LoadModelRegistryAsync("models/model_registry.json");
             
-            // Load available models from repository
+            // Load available models from repository (basic list for now)
             var availableModels = await _modelDownloader.GetAvailableModelsFromRepositoryAsync();
             
             // Update UI
@@ -90,6 +95,205 @@ public partial class ModelManagementForm : Form
             item.Tag = model;
             
             listViewAvailableModels.Items.Add(item);
+        }
+    }
+
+    private void UpdateRepositoryModelsList()
+    {
+        listViewRepositoryModels.Items.Clear();
+        
+        foreach (var model in _filteredRepositoryModels)
+        {
+            var item = new ListViewItem(model.DisplayName);
+            item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("downloads", 0).ToString());
+            item.SubItems.Add(model.AdditionalProperties.GetValueOrDefault("likes", 0).ToString());
+            item.SubItems.Add(model.License ?? "Unknown");
+            item.SubItems.Add(model.Priority.ToString());
+            item.SubItems.Add(model.Description ?? "");
+            item.Tag = model;
+            
+            listViewRepositoryModels.Items.Add(item);
+        }
+
+        labelRepositoryStatus.Text = $"Models: {_filteredRepositoryModels.Count} found";
+    }
+
+    private async void buttonScanRepository_Click(object sender, EventArgs e)
+    {
+        if (_isScanning) return;
+
+        _isScanning = true;
+        buttonScanRepository.Enabled = false;
+        progressBarRepository.Visible = true;
+        labelRepositoryStatus.Text = "Scanning Hugging Face repository...";
+
+        try
+        {
+            var filterOptions = GetFilterOptions();
+            _allRepositoryModels = await _hfService.LoadEntireRepositoryAsync(filterOptions);
+            
+            labelRepositoryStatus.Text = $"Found {_allRepositoryModels.Count} models";
+            ApplyRepositoryFilters();
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "Scan repository");
+            MessageBox.Show($"Failed to scan repository: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            labelRepositoryStatus.Text = "Scan failed";
+        }
+        finally
+        {
+            progressBarRepository.Visible = false;
+            buttonScanRepository.Enabled = true;
+            _isScanning = false;
+        }
+    }
+
+    private ModelFilterOptions GetFilterOptions()
+    {
+        return new ModelFilterOptions
+        {
+            MinDownloads = int.TryParse(textBoxMinDownloads.Text, out var min) ? min : 100,
+            MaxModelSizeMB = int.TryParse(textBoxMaxSize.Text, out var max) ? max : 500,
+            MinLikes = int.TryParse(textBoxMinLikes.Text, out var likes) ? likes : 0,
+            MaxModels = int.TryParse(textBoxMaxModels.Text, out var maxModels) ? maxModels : 100,
+            ExcludeArchived = checkBoxExcludeArchived.Checked,
+            ExcludePrivate = checkBoxExcludePrivate.Checked,
+            OnlyVerified = checkBoxOnlyVerified.Checked,
+            PreferImageNetLabels = checkBoxPreferImageNet.Checked,
+            Licenses = textBoxLicenses.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray(),
+            SearchTerms = textBoxSearchTerms.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray()
+        };
+    }
+
+    private void ApplyRepositoryFilters()
+    {
+        // Apply additional client-side filters
+        _filteredRepositoryModels = _allRepositoryModels.Where(model =>
+        {
+            var downloads = model.AdditionalProperties.GetValueOrDefault("downloads", 0);
+            var likes = model.AdditionalProperties.GetValueOrDefault("likes", 0);
+            var license = model.License?.ToLowerInvariant() ?? "";
+
+            // Check downloads
+            var minDownloads = int.TryParse(textBoxMinDownloads.Text, out var min) ? min : 100;
+            if (downloads is int d && d < minDownloads) return false;
+
+            // Check likes
+            var minLikes = int.TryParse(textBoxMinLikes.Text, out var minL) ? minL : 0;
+            if (likes is int l && l < minLikes) return false;
+
+            // Check license
+            var licenseFilter = textBoxLicenses.Text?.ToLowerInvariant() ?? "";
+            if (!string.IsNullOrEmpty(licenseFilter) && !string.IsNullOrEmpty(license))
+            {
+                var allowedLicenses = licenseFilter.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim());
+                if (!allowedLicenses.Any(l => license.Contains(l))) return false;
+            }
+
+            return true;
+        }).ToList();
+
+        UpdateRepositoryModelsList();
+    }
+
+    private void ClearRepositoryFilters()
+    {
+        textBoxMinDownloads.Text = "100";
+        textBoxMaxSize.Text = "500";
+        textBoxMinLikes.Text = "0";
+        textBoxMaxModels.Text = "100";
+        textBoxLicenses.Text = "apache-2.0,mit,bsd";
+        textBoxSearchTerms.Text = "resnet,imagenet,classification";
+        checkBoxExcludeArchived.Checked = true;
+        checkBoxExcludePrivate.Checked = true;
+        checkBoxOnlyVerified.Checked = false;
+        checkBoxPreferImageNet.Checked = true;
+
+        ApplyRepositoryFilters();
+    }
+
+    private async void buttonDownloadRepositoryModel_Click(object sender, EventArgs e)
+    {
+        if (listViewRepositoryModels.SelectedItems.Count == 0)
+        {
+            MessageBox.Show("Please select at least one model to download.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var selectedModels = listViewRepositoryModels.SelectedItems.Cast<ListViewItem>()
+            .Select(item => item.Tag as ModelInfo)
+            .Where(model => model != null)
+            .ToList();
+
+        var result = MessageBox.Show(
+            $"Download {selectedModels.Count} selected models? This may take some time.",
+            "Confirm Download",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (result != DialogResult.Yes) return;
+
+        progressBarRepository.Visible = true;
+        progressBarRepository.Style = ProgressBarStyle.Continuous;
+        progressBarRepository.Maximum = selectedModels.Count;
+
+        try
+        {
+            var successCount = 0;
+            for (int i = 0; i < selectedModels.Count; i++)
+            {
+                var model = selectedModels[i];
+                labelRepositoryStatus.Text = $"Downloading {model!.DisplayName}...";
+                progressBarRepository.Value = i;
+
+                try
+                {
+                    var huggingfaceId = model.AdditionalProperties.GetValueOrDefault("huggingface_id", "").ToString();
+                    if (!string.IsNullOrEmpty(huggingfaceId))
+                    {
+                        var success = await _hfService.DownloadModelAsync(huggingfaceId);
+                        if (success)
+                        {
+                            successCount++;
+                            _loggingService.Log($"Successfully downloaded model: {model.DisplayName}");
+                            
+                            // Add to registry
+                            var modelPath = Path.Combine("models", huggingfaceId.Replace("/", "-"));
+                            var modelInfo = await _modelDownloader.CreateModelInfoFromDownloadedAsync(model.Name, modelPath);
+                            _currentRegistry!.Models.Add(modelInfo);
+                            await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
+                        }
+                        else
+                        {
+                            _loggingService.Log($"Failed to download model: {model.DisplayName}", LogLevel.Warning);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogException(ex, $"Download model {model.DisplayName}");
+                }
+
+                // Add delay to be respectful to the API
+                await Task.Delay(500);
+            }
+
+            labelRepositoryStatus.Text = $"Download complete: {successCount}/{selectedModels.Count} models downloaded successfully";
+            MessageBox.Show($"Download complete!\n{successCount} out of {selectedModels.Count} models downloaded successfully.", "Download Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            
+            // Refresh the installed models list
+            UpdateModelList();
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "Download selected models");
+            MessageBox.Show($"Download failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            labelRepositoryStatus.Text = "Download failed";
+        }
+        finally
+        {
+            progressBarRepository.Visible = false;
         }
     }
 
@@ -280,25 +484,55 @@ public partial class ModelManagementForm : Form
     {
         this.listViewInstalledModels = new ListView();
         this.listViewAvailableModels = new ListView();
+        this.listViewRepositoryModels = new ListView();
         this.buttonDownloadModel = new Button();
         this.buttonEnableDisable = new Button();
         this.buttonValidateModel = new Button();
         this.buttonRefresh = new Button();
         this.buttonClose = new Button();
+        this.buttonScanRepository = new Button();
+        this.buttonDownloadRepositoryModel = new Button();
+        this.buttonApplyFilters = new Button();
+        this.buttonClearFilters = new Button();
         this.comboBoxDefaultModel = new ComboBox();
+        this.progressBarRepository = new ProgressBar();
         this.label1 = new Label();
         this.label2 = new Label();
         this.label3 = new Label();
+        this.labelRepositoryStatus = new Label();
+        this.labelRepositoryFilters = new Label();
+        this.textBoxMinDownloads = new TextBox();
+        this.textBoxMaxSize = new TextBox();
+        this.textBoxMinLikes = new TextBox();
+        this.textBoxMaxModels = new TextBox();
+        this.textBoxLicenses = new TextBox();
+        this.textBoxSearchTerms = new TextBox();
+        this.checkBoxExcludeArchived = new CheckBox();
+        this.checkBoxExcludePrivate = new CheckBox();
+        this.checkBoxOnlyVerified = new CheckBox();
+        this.checkBoxPreferImageNet = new CheckBox();
+        this.tabControl = new TabControl();
+        this.tabPageInstalled = new TabPage();
+        this.tabPageRepository = new TabPage();
         this.SuspendLayout();
         
         // Form
         this.Text = "Model Management";
-        this.Size = new Size(1000, 750);
+        this.Size = new Size(1200, 800);
         this.StartPosition = FormStartPosition.CenterParent;
-        this.FormBorderStyle = FormBorderStyle.FixedDialog;
-        this.MaximizeBox = false;
+        this.FormBorderStyle = FormBorderStyle.Sizable;
+        this.MaximizeBox = true;
         
-        // Labels
+        // Tab Control
+        this.tabControl.Dock = DockStyle.Fill;
+        this.tabControl.Controls.Add(this.tabPageInstalled);
+        this.tabControl.Controls.Add(this.tabPageRepository);
+        
+        // Tab Page 1 - Installed Models
+        this.tabPageInstalled.Text = "Installed Models";
+        this.tabPageInstalled.Padding = new Padding(10);
+        
+        // Labels for Installed Models
         this.label1.Text = "Installed Models:";
         this.label1.Location = new Point(12, 9);
         this.label1.Size = new Size(100, 20);
@@ -313,7 +547,7 @@ public partial class ModelManagementForm : Form
         
         // Installed Models ListView
         this.listViewInstalledModels.Location = new Point(12, 35);
-        this.listViewInstalledModels.Size = new Size(960, 200);
+        this.listViewInstalledModels.Size = new Size(1140, 200);
         this.listViewInstalledModels.View = View.Details;
         this.listViewInstalledModels.FullRowSelect = true;
         this.listViewInstalledModels.GridLines = true;
@@ -327,7 +561,7 @@ public partial class ModelManagementForm : Form
         
         // Available Models ListView
         this.listViewAvailableModels.Location = new Point(12, 275);
-        this.listViewAvailableModels.Size = new Size(960, 200);
+        this.listViewAvailableModels.Size = new Size(1140, 200);
         this.listViewAvailableModels.View = View.Details;
         this.listViewAvailableModels.FullRowSelect = true;
         this.listViewAvailableModels.GridLines = true;
@@ -343,7 +577,7 @@ public partial class ModelManagementForm : Form
         this.comboBoxDefaultModel.DropDownStyle = ComboBoxStyle.DropDownList;
         this.comboBoxDefaultModel.SelectedIndexChanged += comboBoxDefaultModel_SelectedIndexChanged;
         
-        // Buttons
+        // Buttons for Installed Models
         this.buttonDownloadModel.Text = "Download Selected Model";
         this.buttonDownloadModel.Location = new Point(12, 485);
         this.buttonDownloadModel.Size = new Size(160, 30);
@@ -368,12 +602,12 @@ public partial class ModelManagementForm : Form
         this.buttonRefresh.Click += buttonRefresh_Click;
         
         this.buttonClose.Text = "Close";
-        this.buttonClose.Location = new Point(880, 485);
+        this.buttonClose.Location = new Point(1080, 485);
         this.buttonClose.Size = new Size(90, 30);
         this.buttonClose.Click += buttonClose_Click;
         
-        // Add controls
-        this.Controls.AddRange(new Control[] {
+        // Add controls to Installed Models tab
+        this.tabPageInstalled.Controls.AddRange(new Control[] {
             this.label1, this.label2, this.label3,
             this.listViewInstalledModels, this.listViewAvailableModels,
             this.comboBoxDefaultModel,
@@ -381,19 +615,156 @@ public partial class ModelManagementForm : Form
             this.buttonRefresh, this.buttonClose
         });
         
+        // Tab Page 2 - Repository Browser
+        this.tabPageRepository.Text = "Repository Browser";
+        this.tabPageRepository.Padding = new Padding(10);
+        
+        // Repository Filters Label
+        this.labelRepositoryFilters.Text = "Repository Filters:";
+        this.labelRepositoryFilters.Location = new Point(12, 9);
+        this.labelRepositoryFilters.Size = new Size(120, 20);
+        this.labelRepositoryFilters.Font = new Font(Font.FontFamily, 10, FontStyle.Bold);
+        
+        // Filter Controls
+        CreateFilterControl(this.tabPageRepository, "Min Downloads:", "textBoxMinDownloads", "100", 12, 35);
+        CreateFilterControl(this.tabPageRepository, "Max Size (MB):", "textBoxMaxSize", "500", 12, 65);
+        CreateFilterControl(this.tabPageRepository, "Min Likes:", "textBoxMinLikes", "0", 12, 95);
+        CreateFilterControl(this.tabPageRepository, "Max Models:", "textBoxMaxModels", "100", 12, 125);
+        CreateFilterControl(this.tabPageRepository, "Licenses:", "textBoxLicenses", "apache-2.0,mit,bsd", 12, 155);
+        CreateFilterControl(this.tabPageRepository, "Search Terms:", "textBoxSearchTerms", "resnet,imagenet,classification", 12, 185);
+        
+        // Checkboxes
+        CreateCheckbox(this.tabPageRepository, "Exclude Archived", "checkBoxExcludeArchived", true, 12, 215);
+        CreateCheckbox(this.tabPageRepository, "Exclude Private", "checkBoxExcludePrivate", true, 12, 235);
+        CreateCheckbox(this.tabPageRepository, "Only Verified", "checkBoxOnlyVerified", false, 12, 255);
+        CreateCheckbox(this.tabPageRepository, "Prefer ImageNet Labels", "checkBoxPreferImageNet", true, 12, 275);
+        
+        // Filter Buttons
+        this.buttonApplyFilters.Text = "Apply Filters";
+        this.buttonApplyFilters.Location = new Point(12, 305);
+        this.buttonApplyFilters.Size = new Size(100, 30);
+        this.buttonApplyFilters.BackColor = Color.LightGreen;
+        this.buttonApplyFilters.Click += (s, e) => ApplyRepositoryFilters();
+        
+        this.buttonClearFilters.Text = "Clear Filters";
+        this.buttonClearFilters.Location = new Point(120, 305);
+        this.buttonClearFilters.Size = new Size(100, 30);
+        this.buttonClearFilters.BackColor = Color.LightCoral;
+        this.buttonClearFilters.Click += (s, e) => ClearRepositoryFilters();
+        
+        // Scan Button
+        this.buttonScanRepository.Text = "🔍 Scan Repository";
+        this.buttonScanRepository.Location = new Point(230, 305);
+        this.buttonScanRepository.Size = new Size(140, 30);
+        this.buttonScanRepository.BackColor = Color.LightBlue;
+        this.buttonScanRepository.Click += buttonScanRepository_Click;
+        
+        // Progress Bar
+        this.progressBarRepository.Location = new Point(380, 305);
+        this.progressBarRepository.Size = new Size(200, 30);
+        this.progressBarRepository.Visible = false;
+        
+        // Status Label
+        this.labelRepositoryStatus.Text = "Ready to scan repository";
+        this.labelRepositoryStatus.Location = new Point(590, 310);
+        this.labelRepositoryStatus.Size = new Size(200, 20);
+        
+        // Repository Models ListView
+        this.listViewRepositoryModels.Location = new Point(12, 350);
+        this.listViewRepositoryModels.Size = new Size(1140, 350);
+        this.listViewRepositoryModels.View = View.Details;
+        this.listViewRepositoryModels.FullRowSelect = true;
+        this.listViewRepositoryModels.GridLines = true;
+        this.listViewRepositoryModels.MultiSelect = true;
+        this.listViewRepositoryModels.Columns.Add("Model", 200);
+        this.listViewRepositoryModels.Columns.Add("Downloads", 80);
+        this.listViewRepositoryModels.Columns.Add("Likes", 60);
+        this.listViewRepositoryModels.Columns.Add("License", 100);
+        this.listViewRepositoryModels.Columns.Add("Priority", 60);
+        this.listViewRepositoryModels.Columns.Add("Description", 400);
+        
+        // Download Button
+        this.buttonDownloadRepositoryModel.Text = "Download Selected";
+        this.buttonDownloadRepositoryModel.Location = new Point(12, 710);
+        this.buttonDownloadRepositoryModel.Size = new Size(120, 30);
+        this.buttonDownloadRepositoryModel.BackColor = Color.LightBlue;
+        this.buttonDownloadRepositoryModel.Click += buttonDownloadRepositoryModel_Click;
+        
+        // Add controls to Repository Browser tab
+        this.tabPageRepository.Controls.AddRange(new Control[] {
+            this.labelRepositoryFilters, this.labelRepositoryStatus,
+            this.textBoxMinDownloads, this.textBoxMaxSize, this.textBoxMinLikes, this.textBoxMaxModels,
+            this.textBoxLicenses, this.textBoxSearchTerms,
+            this.checkBoxExcludeArchived, this.checkBoxExcludePrivate, this.checkBoxOnlyVerified, this.checkBoxPreferImageNet,
+            this.buttonApplyFilters, this.buttonClearFilters, this.buttonScanRepository,
+            this.progressBarRepository, this.listViewRepositoryModels, this.buttonDownloadRepositoryModel
+        });
+        
+        // Add tab control to form
+        this.Controls.Add(this.tabControl);
+        
         this.ResumeLayout(false);
         this.PerformLayout();
     }
 
+    private void CreateFilterControl(Control parent, string labelText, string controlName, string defaultValue, int x, int y)
+    {
+        var label = new Label { Text = labelText, Location = new Point(x, y), Size = new Size(120, 20) };
+        parent.Controls.Add(label);
+
+        var textBox = new TextBox
+        {
+            Name = controlName,
+            Text = defaultValue,
+            Location = new Point(x + 130, y),
+            Size = new Size(150, 20)
+        };
+        parent.Controls.Add(textBox);
+    }
+
+    private void CreateCheckbox(Control parent, string text, string controlName, bool defaultValue, int x, int y)
+    {
+        var checkbox = new CheckBox
+        {
+            Text = text,
+            Name = controlName,
+            Checked = defaultValue,
+            Location = new Point(x, y),
+            Size = new Size(150, 20)
+        };
+        parent.Controls.Add(checkbox);
+    }
+
     private ListView listViewInstalledModels;
     private ListView listViewAvailableModels;
+    private ListView listViewRepositoryModels;
     private Button buttonDownloadModel;
     private Button buttonEnableDisable;
     private Button buttonValidateModel;
     private Button buttonRefresh;
     private Button buttonClose;
+    private Button buttonScanRepository;
+    private Button buttonDownloadRepositoryModel;
+    private Button buttonApplyFilters;
+    private Button buttonClearFilters;
     private ComboBox comboBoxDefaultModel;
+    private ProgressBar progressBarRepository;
     private Label label1;
     private Label label2;
     private Label label3;
+    private Label labelRepositoryStatus;
+    private Label labelRepositoryFilters;
+    private TextBox textBoxMinDownloads;
+    private TextBox textBoxMaxSize;
+    private TextBox textBoxMinLikes;
+    private TextBox textBoxMaxModels;
+    private TextBox textBoxLicenses;
+    private TextBox textBoxSearchTerms;
+    private CheckBox checkBoxExcludeArchived;
+    private CheckBox checkBoxExcludePrivate;
+    private CheckBox checkBoxOnlyVerified;
+    private CheckBox checkBoxPreferImageNet;
+    private TabControl tabControl;
+    private TabPage tabPageInstalled;
+    private TabPage tabPageRepository;
 } 
