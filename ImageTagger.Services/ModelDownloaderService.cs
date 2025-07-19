@@ -29,50 +29,46 @@ public class ModelDownloaderService
             _loggingService.LogVerbose($"Models directory: {_modelsDirectory}");
             _loggingService.LogVerbose($"Custom path: {customPath ?? "None"}");
 
-            // Define model URLs based on ONNX Models repository structure
-            _loggingService.LogVerbose("Looking up model URLs...");
-            var modelUrls = GetModelUrls(modelName);
-            if (modelUrls == null)
+            // Get the Hugging Face model ID from the model info
+            var availableModels = await GetAvailableModelsFromRepositoryAsync();
+            var templateModel = availableModels.FirstOrDefault(m => m.Name == modelName);
+            
+            if (templateModel == null)
             {
-                _loggingService.Log($"Model {modelName} not found in repository", LogLevel.Warning);
-                _loggingService.LogVerbose("Available models: resnet50-v1-12, efficientnet-lite4-11, mobilenetv2-12, inception-v1-12, squeezenet1.1-12, densenet-12");
+                _loggingService.Log($"Model {modelName} not found in available models", LogLevel.Warning);
                 return false;
             }
 
-            _loggingService.LogVerbose($"ONNX URL: {modelUrls.OnnxUrl}");
-            _loggingService.LogVerbose($"Labels URL: {modelUrls.LabelsUrl}");
-
-            var targetPath = customPath ?? Path.Combine(_modelsDirectory, modelName);
-            _loggingService.LogVerbose($"Target path: {targetPath}");
-            
-            if (!Directory.Exists(targetPath))
+            // Check if it has a Hugging Face ID
+            if (!templateModel.AdditionalProperties.ContainsKey("huggingface_id"))
             {
-                _loggingService.LogVerbose($"Creating directory: {targetPath}");
-                Directory.CreateDirectory(targetPath);
+                _loggingService.Log($"Model {modelName} does not have a Hugging Face ID", LogLevel.Warning);
+                return false;
+            }
+
+            var huggingfaceId = templateModel.AdditionalProperties["huggingface_id"].ToString();
+            if (string.IsNullOrEmpty(huggingfaceId))
+            {
+                _loggingService.Log($"Invalid Hugging Face ID for model {modelName}", LogLevel.Warning);
+                return false;
+            }
+
+            _loggingService.LogVerbose($"Hugging Face ID: {huggingfaceId}");
+
+            // Use Hugging Face service to download the model
+            var hfService = new HuggingFaceModelService(_loggingService, _modelsDirectory);
+            var success = await hfService.DownloadModelAsync(huggingfaceId, customPath);
+
+            if (success)
+            {
+                _loggingService.Log($"Successfully downloaded Hugging Face model {huggingfaceId} for {modelName}");
             }
             else
             {
-                _loggingService.LogVerbose($"Directory already exists: {targetPath}");
+                _loggingService.Log($"Failed to download Hugging Face model {huggingfaceId} for {modelName}", LogLevel.Error);
             }
 
-            // Download ONNX model file
-            var onnxPath = Path.Combine(targetPath, $"{modelName}.onnx");
-            _loggingService.Log($"Downloading ONNX model to: {onnxPath}");
-            await DownloadFileAsync(modelUrls.OnnxUrl, onnxPath);
-
-            // Download labels file
-            var labelsPath = Path.Combine(targetPath, $"{modelName}_labels.txt");
-            _loggingService.Log($"Downloading labels to: {labelsPath}");
-            await DownloadFileAsync(modelUrls.LabelsUrl, labelsPath);
-
-            // Verify downloaded files
-            var onnxFileInfo = new FileInfo(onnxPath);
-            var labelsFileInfo = new FileInfo(labelsPath);
-            _loggingService.LogVerbose($"Downloaded ONNX file size: {onnxFileInfo.Length:N0} bytes");
-            _loggingService.LogVerbose($"Downloaded labels file size: {labelsFileInfo.Length:N0} bytes");
-
-            _loggingService.Log($"Successfully downloaded model {modelName} to {targetPath}");
-            return true;
+            return success;
         }
         catch (Exception ex)
         {
@@ -86,31 +82,75 @@ public class ModelDownloaderService
     {
         try
         {
-            _loggingService.Log("Fetching available models from ONNX Models repository");
+            _loggingService.Log("Fetching available models from Hugging Face Hub");
 
-            // This would typically fetch from GitHub API
-            // For now, we'll return a curated list of popular models
-            var availableModels = new List<ModelInfo>
+            // Use Hugging Face API to get available models
+            var hfService = new HuggingFaceModelService(_loggingService, _modelsDirectory);
+            var availableModels = await hfService.GetAvailableModelsAsync("image classification", 20);
+
+            // Add some popular models that we know work well
+            var popularModels = new List<ModelInfo>
             {
                 new ModelInfo
                 {
-                    Name = "resnet50-v1-12",
-                    DisplayName = "ResNet-50 v1.12",
+                    Name = "microsoft-resnet-50",
+                    DisplayName = "Microsoft ResNet-50",
                     Description = "ResNet-50 model for image classification with 1000 ImageNet classes",
-                    Source = "ONNX Models Repository",
+                    Source = "Hugging Face Hub",
                     License = "MIT",
                     ImageWidth = 224,
                     ImageHeight = 224,
                     ConfidenceThreshold = 0.1,
                     MaxTags = 5,
-                    Priority = 100
+                    Priority = 100,
+                    AdditionalProperties = new Dictionary<string, object>
+                    {
+                        ["huggingface_id"] = "microsoft/resnet-50",
+                        ["recommended"] = true
+                    }
+                },
+                new ModelInfo
+                {
+                    Name = "google-vit-base-patch16-224",
+                    DisplayName = "Google ViT Base",
+                    Description = "Vision Transformer (ViT) model for image classification",
+                    Source = "Hugging Face Hub",
+                    License = "Apache 2.0",
+                    ImageWidth = 224,
+                    ImageHeight = 224,
+                    ConfidenceThreshold = 0.1,
+                    MaxTags = 5,
+                    Priority = 95,
+                    AdditionalProperties = new Dictionary<string, object>
+                    {
+                        ["huggingface_id"] = "google/vit-base-patch16-224",
+                        ["recommended"] = true
+                    }
+                },
+                new ModelInfo
+                {
+                    Name = "facebook-deit-base-distilled-patch16-224",
+                    DisplayName = "Facebook DeiT Base",
+                    Description = "Data-efficient image Transformers (DeiT) model",
+                    Source = "Hugging Face Hub",
+                    License = "Apache 2.0",
+                    ImageWidth = 224,
+                    ImageHeight = 224,
+                    ConfidenceThreshold = 0.1,
+                    MaxTags = 5,
+                    Priority = 90,
+                    AdditionalProperties = new Dictionary<string, object>
+                    {
+                        ["huggingface_id"] = "facebook/deit-base-distilled-patch16-224",
+                        ["recommended"] = true
+                    }
                 }
-                // Note: Other models temporarily disabled due to ONNX Models repository structure changes
-                // The repository URLs are returning 404 errors, suggesting the structure has changed
-                // These models will be re-enabled once the correct URLs are identified
             };
 
-            _loggingService.Log($"Found {availableModels.Count} available models");
+            // Combine Hugging Face models with popular curated models
+            availableModels.AddRange(popularModels);
+
+            _loggingService.Log($"Found {availableModels.Count} available models from Hugging Face Hub");
             return availableModels;
         }
         catch (Exception ex)
@@ -127,24 +167,26 @@ public class ModelDownloaderService
             _loggingService.Log($"Validating downloaded model: {modelName}");
             _loggingService.LogVerbose($"Model path: {modelPath}");
             
-            var onnxFile = Path.Combine(modelPath, $"{modelName}.onnx");
-            var labelsFile = Path.Combine(modelPath, $"{modelName}_labels.txt");
+            // For Hugging Face models, we need to find the actual files
+            var onnxFile = Directory.GetFiles(modelPath, "*.onnx").FirstOrDefault();
+            var labelsFile = Directory.GetFiles(modelPath, "*.txt").FirstOrDefault();
 
-            _loggingService.LogVerbose($"Checking ONNX file: {onnxFile}");
-            if (!File.Exists(onnxFile))
+            if (string.IsNullOrEmpty(onnxFile))
             {
-                _loggingService.Log($"ONNX file not found: {onnxFile}", LogLevel.Warning);
+                _loggingService.Log($"No ONNX file found in {modelPath}", LogLevel.Warning);
                 _loggingService.LogVerbose($"Directory contents: {string.Join(", ", Directory.GetFiles(modelPath))}");
                 return false;
             }
 
-            _loggingService.LogVerbose($"Checking labels file: {labelsFile}");
-            if (!File.Exists(labelsFile))
+            if (string.IsNullOrEmpty(labelsFile))
             {
-                _loggingService.Log($"Labels file not found: {labelsFile}", LogLevel.Warning);
+                _loggingService.Log($"No labels file found in {modelPath}", LogLevel.Warning);
                 _loggingService.LogVerbose($"Directory contents: {string.Join(", ", Directory.GetFiles(modelPath))}");
                 return false;
             }
+
+            _loggingService.LogVerbose($"Found ONNX file: {onnxFile}");
+            _loggingService.LogVerbose($"Found labels file: {labelsFile}");
 
             // Get file sizes
             var onnxFileInfo = new FileInfo(onnxFile);
@@ -180,32 +222,68 @@ public class ModelDownloaderService
 
     public async Task<ModelInfo> CreateModelInfoFromDownloadedAsync(string modelName, string modelPath)
     {
-        var availableModels = await GetAvailableModelsFromRepositoryAsync();
-        var template = availableModels.FirstOrDefault(m => m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
-
-        if (template == null)
+        try
         {
-            throw new ArgumentException($"Template for model {modelName} not found");
+            _loggingService.Log($"Creating model info for downloaded model: {modelName}");
+            
+            var availableModels = await GetAvailableModelsFromRepositoryAsync();
+            var template = availableModels.FirstOrDefault(m => m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+
+            if (template == null)
+            {
+                _loggingService.Log($"Template for model {modelName} not found, creating basic info", LogLevel.Warning);
+                
+                // Create basic model info for downloaded model
+                var basicModelInfo = new ModelInfo
+                {
+                    Name = modelName,
+                    DisplayName = modelName,
+                    ModelPath = Path.Combine(modelPath, Directory.GetFiles(modelPath, "*.onnx").FirstOrDefault() ?? ""),
+                    LabelsPath = Path.Combine(modelPath, Directory.GetFiles(modelPath, "*.txt").FirstOrDefault() ?? ""),
+                    ImageWidth = 224,
+                    ImageHeight = 224,
+                    ConfidenceThreshold = 0.1,
+                    MaxTags = 5,
+                    Description = $"Downloaded model: {modelName}",
+                    Source = "Hugging Face Hub",
+                    License = "Unknown",
+                    Priority = 100,
+                    IsEnabled = true
+                };
+                
+                return basicModelInfo;
+            }
+
+            // Use template info but update paths to actual downloaded files
+            var onnxFile = Directory.GetFiles(modelPath, "*.onnx").FirstOrDefault();
+            var labelsFile = Directory.GetFiles(modelPath, "*.txt").FirstOrDefault();
+            
+            var modelInfo = new ModelInfo
+            {
+                Name = modelName,
+                DisplayName = template.DisplayName,
+                ModelPath = onnxFile ?? "",
+                LabelsPath = labelsFile ?? "",
+                ImageWidth = template.ImageWidth,
+                ImageHeight = template.ImageHeight,
+                ConfidenceThreshold = template.ConfidenceThreshold,
+                MaxTags = template.MaxTags,
+                Description = template.Description,
+                Source = template.Source,
+                License = template.License,
+                Priority = template.Priority,
+                IsEnabled = true,
+                AdditionalProperties = template.AdditionalProperties
+            };
+
+            _loggingService.Log($"Created model info for {modelName} with ONNX: {onnxFile}, Labels: {labelsFile}");
+            return modelInfo;
         }
-
-        var modelInfo = new ModelInfo
+        catch (Exception ex)
         {
-            Name = modelName,
-            DisplayName = template.DisplayName,
-            ModelPath = Path.Combine(modelPath, $"{modelName}.onnx"),
-            LabelsPath = Path.Combine(modelPath, $"{modelName}_labels.txt"),
-            ImageWidth = template.ImageWidth,
-            ImageHeight = template.ImageHeight,
-            ConfidenceThreshold = template.ConfidenceThreshold,
-            MaxTags = template.MaxTags,
-            Description = template.Description,
-            Source = template.Source,
-            License = template.License,
-            Priority = template.Priority,
-            IsEnabled = true
-        };
-
-        return modelInfo;
+            _loggingService.LogException(ex, $"CreateModelInfoFromDownloadedAsync for {modelName}");
+            throw;
+        }
     }
 
     private ModelUrls? GetModelUrls(string modelName)
