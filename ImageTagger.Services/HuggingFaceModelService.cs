@@ -41,8 +41,8 @@ public class HuggingFaceModelService
             }
             else
             {
-                // Default search for ONNX models with image classification
-                searchTerms.AddRange(new[] { "onnx", "image", "classification" });
+                // Default search for vision models - broader and more likely to find results
+                searchTerms.AddRange(new[] { "vision", "image", "classification" });
             }
             
             var searchQuery = string.Join(" ", searchTerms);
@@ -158,28 +158,24 @@ public class HuggingFaceModelService
                     $"offset={pageSize * (page - 1)}"
                 };
                 
-                // Build search query from multiple sources
+                // Build search query - prioritize user search terms, avoid overly restrictive combinations
                 var searchTerms = new List<string>();
                 
-                // Add user-provided search terms
+                // Add user-provided search terms (these are the most important)
                 if (filterOptions.SearchTerms?.Any() == true)
                 {
                     searchTerms.AddRange(filterOptions.SearchTerms);
                 }
                 
-                // Add task categories as search terms (more reliable than filters)
-                if (filterOptions.TaskCategories?.Any() == true)
+                // Only add format requirements if no user search terms provided
+                // This prevents overly restrictive searches
+                if (!searchTerms.Any() && filterOptions.SupportedFormats?.Any() == true)
                 {
-                    searchTerms.AddRange(filterOptions.TaskCategories);
+                    // Use broader terms that are more likely to find ONNX models
+                    searchTerms.AddRange(new[] { "vision", "image", "classification" });
                 }
                 
-                // Add format requirements as search terms
-                if (filterOptions.SupportedFormats?.Any() == true)
-                {
-                    searchTerms.AddRange(filterOptions.SupportedFormats);
-                }
-                
-                // Combine all search terms
+                // Combine search terms - use a more flexible approach
                 if (searchTerms.Any())
                 {
                     var searchQuery = string.Join(" ", searchTerms.Distinct());

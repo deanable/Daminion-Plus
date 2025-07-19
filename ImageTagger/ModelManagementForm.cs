@@ -175,7 +175,7 @@ public partial class ModelManagementForm : Form
             OnlyVerified = checkBoxOnlyVerified.Checked,
             PreferImageNetLabels = checkBoxPreferImageNet.Checked,
             Licenses = licenses,
-            SearchTerms = textBoxSearchTerms.Text?.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray(),
+            SearchTerms = textBoxSearchTerms.Text?.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToArray(),
             SupportedFormats = new[] { "onnx" },
             TaskCategories = new[] { "image-classification", "computer-vision" },
             SortBy = "downloads",
@@ -228,7 +228,7 @@ public partial class ModelManagementForm : Form
         trackBarMinLikes.Value = 0;
         trackBarMaxModels.Value = 100;
         comboBoxLicenses.SelectedIndex = 5; // "Apache 2.0, MIT, BSD"
-        textBoxSearchTerms.Text = "resnet,imagenet,classification";
+        textBoxSearchTerms.Text = "vision,image,classification";
         checkBoxExcludeArchived.Checked = true;
         checkBoxExcludePrivate.Checked = true;
         checkBoxOnlyVerified.Checked = false;
@@ -659,7 +659,7 @@ public partial class ModelManagementForm : Form
         CreateTrackBarControl(this.tabPageRepository, "Min Likes:", trackBarMinLikes, labelMinLikesValue, 0, 1000, 0, 12, 135);
         CreateTrackBarControl(this.tabPageRepository, "Max Models:", trackBarMaxModels, labelMaxModelsValue, 10, 500, 100, 12, 185);
         CreateLicenseComboBox(this.tabPageRepository, "Licenses:", comboBoxLicenses, 12, 235);
-        CreateSearchTermsControl(this.tabPageRepository, "Search Terms:", textBoxSearchTerms, "resnet,imagenet,classification", 12, 285);
+        CreateSearchTermsControl(this.tabPageRepository, "Search Terms:", textBoxSearchTerms, "vision,image,classification", 12, 285);
         
         // Checkboxes with better spacing
         CreateCheckbox(this.tabPageRepository, "Exclude Archived", "checkBoxExcludeArchived", true, 12, 335);
