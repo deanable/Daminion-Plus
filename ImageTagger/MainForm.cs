@@ -37,6 +37,8 @@ public partial class MainForm : Form
     private readonly IMetadataService _metadataService;
     private readonly List<IImageTaggingService> _taggingServices;
     private readonly AppSettings _settings;
+    private readonly IModelManager _modelManager;
+    private readonly ModelDownloaderService _modelDownloader;
 
     public MainForm()
     {
@@ -51,6 +53,10 @@ public partial class MainForm : Form
             minimumLogLevel: logLevel,
             logToConsole: _settings.Logging.LogToConsole);
         _metadataService = new MetadataService(_loggingService, _settings.Metadata.CreateBackups, _settings.Metadata.SupportedFormats);
+        
+        // Initialize model management
+        _modelManager = new ModelManager(_loggingService);
+        _modelDownloader = new ModelDownloaderService(_loggingService);
         
         // Initialize tagging services
         _taggingServices = InitializeTaggingServices();
@@ -102,6 +108,9 @@ public partial class MainForm : Form
             _settings.CloudApi.ApiKey,
             _settings.CloudApi.TimeoutSeconds));
 
+        // Initialize model registry and add ML.NET services
+        InitializeModelRegistry();
+        
         // Add ML.NET services for each available model
         var modelsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
         _loggingService.Log($"Checking for models in directory: {modelsDirectory}");
@@ -166,6 +175,67 @@ public partial class MainForm : Form
 
         _loggingService.Log($"Total tagging services initialized: {services.Count}");
         return services;
+    }
+
+    private async void InitializeModelRegistry()
+    {
+        try
+        {
+            _loggingService.Log("Initializing model registry...");
+            
+            var registryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "model_registry.json");
+            var registry = await _modelManager.LoadModelRegistryAsync(registryPath);
+            
+            // Check if we need to add the existing ResNet model to the registry
+            var existingModelPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "resnet50-v1-12.onnx");
+            var existingLabelsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "imagenet_classes.txt");
+            
+            if (File.Exists(existingModelPath) && File.Exists(existingLabelsPath))
+            {
+                var resnetModel = registry.Models.FirstOrDefault(m => m.Name == "resnet50-v1-12");
+                if (resnetModel == null)
+                {
+                    _loggingService.Log("Adding existing ResNet-50 model to registry...");
+                    
+                    var modelInfo = new ModelInfo
+                    {
+                        Name = "resnet50-v1-12",
+                        DisplayName = "ResNet-50 v1.12",
+                        ModelPath = existingModelPath,
+                        LabelsPath = existingLabelsPath,
+                        Description = "ResNet-50 model for image classification",
+                        Source = "ONNX Models",
+                        License = "MIT",
+                        ImageWidth = 224,
+                        ImageHeight = 224,
+                        ConfidenceThreshold = _settings.Model.ConfidenceThreshold,
+                        MaxTags = _settings.Model.MaxTags,
+                        Priority = 100,
+                        IsEnabled = true
+                    };
+                    
+                    registry.Models.Add(modelInfo);
+                    
+                    if (string.IsNullOrEmpty(registry.DefaultModelName))
+                    {
+                        registry.DefaultModelName = modelInfo.Name;
+                    }
+                    
+                    await _modelManager.SaveModelRegistryAsync(registry, registryPath);
+                    _loggingService.Log("ResNet-50 model added to registry successfully");
+                }
+                else
+                {
+                    _loggingService.Log("ResNet-50 model already exists in registry");
+                }
+            }
+            
+            _loggingService.Log($"Model registry initialized with {registry.Models.Count} models");
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "InitializeModelRegistry");
+        }
     }
 
     private void InitializeUI()
@@ -437,11 +507,11 @@ public partial class MainForm : Form
     {
         try
         {
-            var modelsForm = new ModelsForm(_loggingService);
-            modelsForm.ShowDialog(this);
+            var modelManagementForm = new ModelManagementForm(_loggingService);
+            modelManagementForm.ShowDialog(this);
             
             // Refresh the model list after the dialog closes
-            RefreshModelList();
+            _ = Task.Run(async () => await RefreshModelList());
         }
         catch (Exception ex)
         {
@@ -450,41 +520,37 @@ public partial class MainForm : Form
         }
     }
 
-    private void RefreshModelList()
+    private async Task RefreshModelList()
     {
         try
         {
-                    // Get available models from the models directory
-        var modelsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
-        if (!System.IO.Directory.Exists(modelsDirectory))
-            return;
-
-        var modelFiles = System.IO.Directory.GetFiles(modelsDirectory, "*.onnx");
-            var availableModels = new List<string>();
-
-            foreach (var modelFile in modelFiles)
-            {
-                var modelName = Path.GetFileNameWithoutExtension(modelFile);
-                var labelsFile = Path.Combine(modelsDirectory, $"{modelName}_classes.txt");
-                
-                if (File.Exists(labelsFile))
-                {
-                    availableModels.Add($"ML.NET ({modelName})");
-                }
-            }
+            _loggingService.Log("Refreshing model list...");
+            
+            // Get models from the registry
+            var registryPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "model_registry.json");
+            var registry = await _modelManager.LoadModelRegistryAsync(registryPath);
+            
+            var enabledModels = registry.Models.Where(m => m.IsEnabled).ToList();
+            _loggingService.Log($"Found {enabledModels.Count} enabled models in registry");
 
             // Update the combo box
             comboBoxTagMethod.Items.Clear();
             comboBoxTagMethod.Items.Add("Cloud API");
-            foreach (var model in availableModels)
+            
+            foreach (var model in enabledModels)
             {
-                comboBoxTagMethod.Items.Add(model);
+                var serviceName = $"ML.NET ({model.DisplayName})";
+                comboBoxTagMethod.Items.Add(serviceName);
+                _loggingService.Log($"Added model to dropdown: {serviceName}");
             }
             
             if (comboBoxTagMethod.Items.Count > 0)
+            {
                 comboBoxTagMethod.SelectedIndex = 0;
+                _loggingService.Log($"Selected service: {comboBoxTagMethod.SelectedItem}");
+            }
 
-            _loggingService.Log($"Refreshed model list: {availableModels.Count} local models available");
+            _loggingService.Log($"Refreshed model list: {enabledModels.Count} local models available");
         }
         catch (Exception ex)
         {
