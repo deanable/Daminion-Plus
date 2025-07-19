@@ -511,7 +511,17 @@ public partial class MainForm : Form
             modelManagementForm.ShowDialog(this);
             
             // Refresh the model list after the dialog closes
-            _ = Task.Run(async () => await RefreshModelList());
+            _ = Task.Run(async () => 
+            {
+                try
+                {
+                    await RefreshModelList();
+                }
+                catch (Exception ex)
+                {
+                    _loggingService.LogException(ex, "Background RefreshModelList");
+                }
+            });
         }
         catch (Exception ex)
         {
@@ -533,6 +543,13 @@ public partial class MainForm : Form
             var enabledModels = registry.Models.Where(m => m.IsEnabled).ToList();
             _loggingService.Log($"Found {enabledModels.Count} enabled models in registry");
 
+            // Update the combo box on the UI thread
+            if (InvokeRequired)
+            {
+                Invoke(new Action(async () => await RefreshModelList()));
+                return;
+            }
+
             // Update the combo box
             comboBoxTagMethod.Items.Clear();
             comboBoxTagMethod.Items.Add("Cloud API");
@@ -541,7 +558,7 @@ public partial class MainForm : Form
             {
                 var serviceName = $"ML.NET ({model.DisplayName})";
                 comboBoxTagMethod.Items.Add(serviceName);
-                _loggingService.Log($"Added model to dropdown: {serviceName}");
+                _loggingService.LogVerbose($"Added model to dropdown: {serviceName}");
             }
             
             if (comboBoxTagMethod.Items.Count > 0)

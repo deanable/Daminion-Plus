@@ -1,0 +1,22 @@
+{
+  "Models": [
+    {
+      "Name": "resnet50-v1-12",
+      "DisplayName": "ResNet-50 v1.12",
+      "ModelPath": "models\\resnet50-v1-12.onnx",
+      "LabelsPath": "models\\imagenet_classes.txt",
+      "ImageWidth": 224,
+      "ImageHeight": 224,
+      "ConfidenceThreshold": 0.1,
+      "MaxTags": 5,
+      "Description": "ResNet-50 model for image classification",
+      "Source": "ONNX Models",
+      "License": "MIT",
+      "IsEnabled": true,
+      "Priority": 100,
+      "AdditionalProperties": {}
+    }
+  ],
+  "DefaultModelName": "resnet50-v1-12",
+  "ModelAliases": {}
+}

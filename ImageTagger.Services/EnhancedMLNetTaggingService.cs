@@ -229,91 +229,162 @@ public class EnhancedMLNetTaggingService : IImageTaggingService
 
     private async Task EnsureModelLoadedAsync(ModelInfo model, CancellationToken cancellationToken)
     {
-        lock (_sessionLock)
+        try
         {
-            if (_modelSessions.ContainsKey(model.Name) && _modelLabels.ContainsKey(model.Name))
-                return;
+            lock (_sessionLock)
+            {
+                if (_modelSessions.ContainsKey(model.Name) && _modelLabels.ContainsKey(model.Name))
+                {
+                    _loggingService.LogVerbose($"Model {model.Name} already loaded, skipping");
+                    return;
+                }
+            }
+
+            _loggingService.Log($"Loading model: {model.Name}");
+            _loggingService.LogVerbose($"Model path: {model.ModelPath}");
+            _loggingService.LogVerbose($"Labels path: {model.LabelsPath}");
+
+            // Verify files exist before loading
+            if (!File.Exists(model.ModelPath))
+            {
+                throw new FileNotFoundException($"Model file not found: {model.ModelPath}");
+            }
+
+            if (!File.Exists(model.LabelsPath))
+            {
+                throw new FileNotFoundException($"Labels file not found: {model.LabelsPath}");
+            }
+
+            // Get file sizes for debugging
+            var modelFileInfo = new FileInfo(model.ModelPath);
+            var labelsFileInfo = new FileInfo(model.LabelsPath);
+            _loggingService.LogVerbose($"Model file size: {modelFileInfo.Length:N0} bytes");
+            _loggingService.LogVerbose($"Labels file size: {labelsFileInfo.Length:N0} bytes");
+
+            // Load ONNX session
+            _loggingService.LogVerbose("Creating ONNX inference session...");
+            var session = new InferenceSession(model.ModelPath);
+            
+            var inputMetadata = session.InputMetadata;
+            var outputMetadata = session.OutputMetadata;
+            _loggingService.LogVerbose($"ONNX session created successfully");
+            _loggingService.LogVerbose($"Inputs: {string.Join(", ", inputMetadata.Keys)}");
+            _loggingService.LogVerbose($"Outputs: {string.Join(", ", outputMetadata.Keys)}");
+            
+            // Load labels
+            _loggingService.LogVerbose("Reading labels file...");
+            var labels = await File.ReadAllLinesAsync(model.LabelsPath, cancellationToken);
+            if (labels.Length == 0)
+            {
+                throw new InvalidOperationException($"Labels file is empty for model {model.Name}");
+            }
+
+            _loggingService.LogVerbose($"Read {labels.Length} labels from file");
+
+            lock (_sessionLock)
+            {
+                _modelSessions[model.Name] = session;
+                _modelLabels[model.Name] = labels;
+                _loggingService.LogVerbose($"Model {model.Name} added to cache");
+            }
+
+            _loggingService.Log($"Model loaded successfully: {model.Name} with {labels.Length} labels", LogLevel.Debug);
         }
-
-        _loggingService.Log($"Loading model: {model.Name}");
-
-        // Load ONNX session
-        var session = new InferenceSession(model.ModelPath);
-        
-        // Load labels
-        var labels = await File.ReadAllLinesAsync(model.LabelsPath, cancellationToken);
-        if (labels.Length == 0)
+        catch (Exception ex)
         {
-            throw new InvalidOperationException($"Labels file is empty for model {model.Name}");
+            _loggingService.LogException(ex, $"EnsureModelLoadedAsync for {model.Name}");
+            _loggingService.Log($"Failed to load model '{model.Name}': {ex.Message}", LogLevel.Error);
+            throw;
         }
-
-        lock (_sessionLock)
-        {
-            _modelSessions[model.Name] = session;
-            _modelLabels[model.Name] = labels;
-        }
-
-        _loggingService.Log($"Model loaded successfully: {model.Name} with {labels.Length} labels", LogLevel.Debug);
     }
 
     private List<(string Label, double Score)> RunInference(string imagePath, ModelInfo model)
     {
-        lock (_sessionLock)
+        try
         {
-            if (!_modelSessions.ContainsKey(model.Name) || !_modelLabels.ContainsKey(model.Name))
+            lock (_sessionLock)
             {
-                throw new InvalidOperationException($"Model {model.Name} not loaded");
+                if (!_modelSessions.ContainsKey(model.Name) || !_modelLabels.ContainsKey(model.Name))
+                {
+                    throw new InvalidOperationException($"Model {model.Name} not loaded");
+                }
+
+                var session = _modelSessions[model.Name];
+                var labels = _modelLabels[model.Name];
+
+                _loggingService.LogVerbose($"Starting inference for model: {model.Name}");
+                _loggingService.LogVerbose($"Image path: {imagePath}");
+                _loggingService.LogVerbose($"Image dimensions: {model.ImageWidth}x{model.ImageHeight}");
+                _loggingService.LogVerbose($"Labels count: {labels.Length}");
+
+                // Create MLContext
+                var mlContext = new MLContext(seed: 1);
+
+                // Define input data
+                var data = new List<ImageInput> { new() { ImagePath = imagePath } };
+                var imageData = mlContext.Data.LoadFromEnumerable(data);
+                _loggingService.LogVerbose("Created ML.NET data view");
+
+                // Get ONNX output column name
+                string outputColumnName = GetOnnxOutputColumnName(session);
+                _loggingService.LogVerbose($"Using ONNX output column: {outputColumnName}");
+
+                // Define pipeline
+                _loggingService.LogVerbose("Building ML.NET pipeline...");
+                var pipeline = mlContext.Transforms.LoadImages(
+                        outputColumnName: "data",
+                        imageFolder: Path.GetDirectoryName(imagePath),
+                        inputColumnName: nameof(ImageInput.ImagePath))
+                    .Append(mlContext.Transforms.ResizeImages(
+                        outputColumnName: "data",
+                        imageWidth: model.ImageWidth,
+                        imageHeight: model.ImageHeight,
+                        inputColumnName: "data"))
+                    .Append(mlContext.Transforms.ExtractPixels(outputColumnName: "data"))
+                    .Append(mlContext.Transforms.ApplyOnnxModel(
+                        modelFile: model.ModelPath,
+                        outputColumnNames: new[] { outputColumnName },
+                        inputColumnNames: new[] { "data" }));
+
+                // Fit and transform
+                _loggingService.LogVerbose("Fitting ML.NET pipeline...");
+                var mlModel = pipeline.Fit(imageData);
+                _loggingService.LogVerbose("Creating prediction engine...");
+                var predictionEngine = mlContext.Model.CreatePredictionEngine<ImageInput, ImagePrediction>(mlModel);
+                
+                _loggingService.LogVerbose("Running prediction...");
+                var prediction = predictionEngine.Predict(new ImageInput { ImagePath = imagePath });
+
+                if (prediction.PredictedLabels == null || prediction.PredictedLabels.Length == 0)
+                {
+                    throw new ApplicationException($"Model {model.Name} returned empty predictions");
+                }
+
+                _loggingService.LogVerbose($"Raw prediction length: {prediction.PredictedLabels.Length}");
+
+                // Get top predictions with confidence scores
+                var predictions = prediction.PredictedLabels
+                    .Select((score, index) => (Label: index < labels.Length ? labels[index] : $"Unknown_{index}", Score: (double)score))
+                    .OrderByDescending(x => x.Score)
+                    .ToList();
+
+                _loggingService.LogVerbose($"Generated {predictions.Count} predictions for model {model.Name}");
+                
+                // Log top predictions for debugging
+                var topPredictions = predictions.Take(5).ToList();
+                foreach (var pred in topPredictions)
+                {
+                    _loggingService.LogVerbose($"  - {pred.Label}: {pred.Score:F4}");
+                }
+
+                return predictions;
             }
-
-            var session = _modelSessions[model.Name];
-            var labels = _modelLabels[model.Name];
-
-            // Create MLContext
-            var mlContext = new MLContext(seed: 1);
-
-            // Define input data
-            var data = new List<ImageInput> { new() { ImagePath = imagePath } };
-            var imageData = mlContext.Data.LoadFromEnumerable(data);
-
-            // Get ONNX output column name
-            string outputColumnName = GetOnnxOutputColumnName(session);
-            _loggingService.Log($"Detected ONNX output column name: {outputColumnName}", LogLevel.Debug);
-
-            // Define pipeline
-            var pipeline = mlContext.Transforms.LoadImages(
-                    outputColumnName: "data",
-                    imageFolder: Path.GetDirectoryName(imagePath),
-                    inputColumnName: nameof(ImageInput.ImagePath))
-                .Append(mlContext.Transforms.ResizeImages(
-                    outputColumnName: "data",
-                    imageWidth: model.ImageWidth,
-                    imageHeight: model.ImageHeight,
-                    inputColumnName: "data"))
-                .Append(mlContext.Transforms.ExtractPixels(outputColumnName: "data"))
-                .Append(mlContext.Transforms.ApplyOnnxModel(
-                    modelFile: model.ModelPath,
-                    outputColumnNames: new[] { outputColumnName },
-                    inputColumnNames: new[] { "data" }));
-
-            // Fit and transform
-            var mlModel = pipeline.Fit(imageData);
-            var predictionEngine = mlContext.Model.CreatePredictionEngine<ImageInput, ImagePrediction>(mlModel);
-            var prediction = predictionEngine.Predict(new ImageInput { ImagePath = imagePath });
-
-            if (prediction.PredictedLabels == null || prediction.PredictedLabels.Length == 0)
-            {
-                throw new ApplicationException($"Model {model.Name} returned empty predictions");
-            }
-
-            // Get top predictions with confidence scores
-            var predictions = prediction.PredictedLabels
-                .Select((score, index) => (Label: index < labels.Length ? labels[index] : $"Unknown_{index}", Score: (double)score))
-                .OrderByDescending(x => x.Score)
-                .ToList();
-
-            _loggingService.LogVerbose($"Generated {predictions.Count} predictions for model {model.Name}");
-
-            return predictions;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, $"RunInference for model {model.Name}");
+            _loggingService.Log($"Inference failed for model '{model.Name}': {ex.Message}", LogLevel.Error);
+            throw;
         }
     }
 

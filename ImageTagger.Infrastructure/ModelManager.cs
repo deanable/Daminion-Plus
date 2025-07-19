@@ -74,72 +74,190 @@ public class ModelManager : IModelManager
 
     public async Task<ModelInfo?> GetModelAsync(string modelName)
     {
-        var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
-        return registry.Models.FirstOrDefault(m => 
-            m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase) ||
-            m.DisplayName.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+        try
+        {
+            _loggingService.Log($"Getting model: {modelName}");
+            var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
+            
+            var model = registry.Models.FirstOrDefault(m => 
+                m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase) ||
+                m.DisplayName.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+            
+            if (model != null)
+            {
+                _loggingService.Log($"Found model: {model.Name} (Display: {model.DisplayName})");
+                _loggingService.LogVerbose($"Model path: {model.ModelPath}, Labels: {model.LabelsPath}");
+            }
+            else
+            {
+                _loggingService.Log($"Model not found: {modelName}", LogLevel.Warning);
+                _loggingService.LogVerbose($"Available models: {string.Join(", ", registry.Models.Select(m => m.Name))}");
+            }
+            
+            return model;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, $"GetModelAsync for {modelName}");
+            return null;
+        }
     }
 
     public async Task<List<ModelInfo>> GetAllModelsAsync()
     {
-        var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
-        return registry.Models.OrderByDescending(m => m.Priority).ToList();
+        try
+        {
+            _loggingService.Log("Getting all models from registry");
+            var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
+            var models = registry.Models.OrderByDescending(m => m.Priority).ToList();
+            
+            _loggingService.Log($"Retrieved {models.Count} models from registry");
+            foreach (var model in models)
+            {
+                _loggingService.LogVerbose($"  - {model.Name} (Priority: {model.Priority}, Enabled: {model.IsEnabled})");
+            }
+            
+            return models;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "GetAllModelsAsync");
+            return new List<ModelInfo>();
+        }
     }
 
     public async Task<ModelInfo?> GetDefaultModelAsync()
     {
-        var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
-        if (string.IsNullOrEmpty(registry.DefaultModelName))
-            return registry.Models.FirstOrDefault(m => m.IsEnabled);
+        try
+        {
+            _loggingService.Log("Getting default model from registry");
+            var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
+            
+            if (string.IsNullOrEmpty(registry.DefaultModelName))
+            {
+                _loggingService.Log("No default model name specified, finding first enabled model");
+                var firstEnabled = registry.Models.FirstOrDefault(m => m.IsEnabled);
+                if (firstEnabled != null)
+                {
+                    _loggingService.Log($"Using first enabled model as default: {firstEnabled.Name}");
+                }
+                else
+                {
+                    _loggingService.Log("No enabled models found", LogLevel.Warning);
+                }
+                return firstEnabled;
+            }
 
-        return registry.Models.FirstOrDefault(m => 
-            m.Name.Equals(registry.DefaultModelName, StringComparison.OrdinalIgnoreCase) && m.IsEnabled);
+            _loggingService.Log($"Looking for default model: {registry.DefaultModelName}");
+            var defaultModel = registry.Models.FirstOrDefault(m => 
+                m.Name.Equals(registry.DefaultModelName, StringComparison.OrdinalIgnoreCase) && m.IsEnabled);
+            
+            if (defaultModel != null)
+            {
+                _loggingService.Log($"Found default model: {defaultModel.Name} (Enabled: {defaultModel.IsEnabled})");
+            }
+            else
+            {
+                _loggingService.Log($"Default model '{registry.DefaultModelName}' not found or not enabled", LogLevel.Warning);
+                _loggingService.LogVerbose($"Available models: {string.Join(", ", registry.Models.Select(m => $"{m.Name}(Enabled:{m.IsEnabled})"))}");
+            }
+            
+            return defaultModel;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "GetDefaultModelAsync");
+            return null;
+        }
     }
 
     public async Task SetDefaultModelAsync(string modelName)
     {
-        var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
-        var model = registry.Models.FirstOrDefault(m => 
-            m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
-        
-        if (model == null)
-            throw new ArgumentException($"Model '{modelName}' not found");
+        try
+        {
+            _loggingService.Log($"Setting default model to: {modelName}");
+            var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
+            
+            var model = registry.Models.FirstOrDefault(m => 
+                m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+            
+            if (model == null)
+            {
+                _loggingService.Log($"Model '{modelName}' not found in registry", LogLevel.Error);
+                _loggingService.LogVerbose($"Available models: {string.Join(", ", registry.Models.Select(m => m.Name))}");
+                throw new ArgumentException($"Model '{modelName}' not found");
+            }
 
-        registry.DefaultModelName = model.Name;
-        await SaveModelRegistryAsync(registry, GetDefaultRegistryPath());
-        _loggingService.Log($"Set default model to: {modelName}");
+            _loggingService.Log($"Found model '{model.Name}' in registry, setting as default");
+            registry.DefaultModelName = model.Name;
+            await SaveModelRegistryAsync(registry, GetDefaultRegistryPath());
+            _loggingService.Log($"Successfully set default model to: {modelName}");
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, $"SetDefaultModelAsync for {modelName}");
+            throw;
+        }
     }
 
     public async Task<bool> ValidateModelAsync(ModelInfo model)
     {
         try
         {
+            _loggingService.Log($"Starting validation for model: {model.Name}");
+            _loggingService.LogVerbose($"Model path: {model.ModelPath}");
+            _loggingService.LogVerbose($"Labels path: {model.LabelsPath}");
+            
+            // Check if model file exists
             if (!File.Exists(model.ModelPath))
             {
                 _loggingService.Log($"Model file not found: {model.ModelPath}", LogLevel.Warning);
+                _loggingService.LogVerbose($"Current directory: {Directory.GetCurrentDirectory()}");
+                _loggingService.LogVerbose($"Absolute path: {Path.GetFullPath(model.ModelPath)}");
                 return false;
             }
 
+            // Check if labels file exists
             if (!File.Exists(model.LabelsPath))
             {
                 _loggingService.Log($"Labels file not found: {model.LabelsPath}", LogLevel.Warning);
+                _loggingService.LogVerbose($"Current directory: {Directory.GetCurrentDirectory()}");
+                _loggingService.LogVerbose($"Absolute path: {Path.GetFullPath(model.LabelsPath)}");
                 return false;
             }
 
+            // Get file sizes for debugging
+            var modelFileInfo = new FileInfo(model.ModelPath);
+            var labelsFileInfo = new FileInfo(model.LabelsPath);
+            _loggingService.LogVerbose($"Model file size: {modelFileInfo.Length:N0} bytes");
+            _loggingService.LogVerbose($"Labels file size: {labelsFileInfo.Length:N0} bytes");
+
             // Test ONNX model loading
+            _loggingService.LogVerbose("Attempting to load ONNX model...");
             using var session = new InferenceSession(model.ModelPath);
             var inputMetadata = session.InputMetadata;
             var outputMetadata = session.OutputMetadata;
 
             _loggingService.Log($"Model validation successful: {model.Name}", LogLevel.Debug);
-            _loggingService.LogVerbose($"Inputs: {string.Join(", ", inputMetadata.Keys)}");
-            _loggingService.LogVerbose($"Outputs: {string.Join(", ", outputMetadata.Keys)}");
+            _loggingService.LogVerbose($"ONNX Inputs: {string.Join(", ", inputMetadata.Keys)}");
+            _loggingService.LogVerbose($"ONNX Outputs: {string.Join(", ", outputMetadata.Keys)}");
+            
+            // Log input/output shapes
+            foreach (var input in inputMetadata)
+            {
+                _loggingService.LogVerbose($"Input '{input.Key}': {string.Join("x", input.Value.Dimensions)}");
+            }
+            foreach (var output in outputMetadata)
+            {
+                _loggingService.LogVerbose($"Output '{output.Key}': {string.Join("x", output.Value.Dimensions)}");
+            }
 
             return true;
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, $"Model validation failed for {model.Name}");
+            _loggingService.Log($"Validation failed for model '{model.Name}': {ex.Message}", LogLevel.Error);
             return false;
         }
     }
@@ -233,17 +351,32 @@ public class ModelManager : IModelManager
 
     public async Task<bool> EnableModelAsync(string modelName, bool enabled)
     {
-        var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
-        var model = registry.Models.FirstOrDefault(m => 
-            m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
-        
-        if (model == null)
-            return false;
+        try
+        {
+            _loggingService.Log($"Attempting to {(enabled ? "enable" : "disable")} model: {modelName}");
+            var registry = await LoadModelRegistryAsync(GetDefaultRegistryPath());
+            
+            var model = registry.Models.FirstOrDefault(m => 
+                m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+            
+            if (model == null)
+            {
+                _loggingService.Log($"Model '{modelName}' not found in registry", LogLevel.Warning);
+                _loggingService.LogVerbose($"Available models: {string.Join(", ", registry.Models.Select(m => m.Name))}");
+                return false;
+            }
 
-        model.IsEnabled = enabled;
-        await SaveModelRegistryAsync(registry, GetDefaultRegistryPath());
-        _loggingService.Log($"Model {modelName} {(enabled ? "enabled" : "disabled")}");
-        return true;
+            _loggingService.Log($"Found model '{model.Name}', current enabled state: {model.IsEnabled}");
+            model.IsEnabled = enabled;
+            await SaveModelRegistryAsync(registry, GetDefaultRegistryPath());
+            _loggingService.Log($"Successfully {(enabled ? "enabled" : "disabled")} model: {modelName}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, $"EnableModelAsync for {modelName}");
+            return false;
+        }
     }
 
     public async Task<ModelInfo> CreateModelFromTemplateAsync(string templateName, string modelName, string modelPath)
