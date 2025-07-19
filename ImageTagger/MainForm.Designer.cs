@@ -35,6 +35,8 @@ partial class MainForm
         this.btnTagImage = new System.Windows.Forms.Button();
         this.listBoxTags = new System.Windows.Forms.ListBox();
         this.btnSaveTags = new System.Windows.Forms.Button();
+        this.progressBar = new System.Windows.Forms.ProgressBar();
+        this.lblStatus = new System.Windows.Forms.Label();
         ((System.ComponentModel.ISupportInitialize)(this.pictureBoxPreview)).BeginInit();
         this.SuspendLayout();
         // 
@@ -97,20 +99,40 @@ partial class MainForm
         this.btnSaveTags.UseVisualStyleBackColor = true;
         this.btnSaveTags.Click += new System.EventHandler(this.btnSaveTags_Click);
         // 
+        // progressBar
+        // 
+        this.progressBar.Location = new System.Drawing.Point(20, 320);
+        this.progressBar.Name = "progressBar";
+        this.progressBar.Size = new System.Drawing.Size(320, 23);
+        this.progressBar.TabIndex = 6;
+        this.progressBar.Visible = false;
+        // 
+        // lblStatus
+        // 
+        this.lblStatus.AutoSize = true;
+        this.lblStatus.Location = new System.Drawing.Point(20, 350);
+        this.lblStatus.Name = "lblStatus";
+        this.lblStatus.Size = new System.Drawing.Size(50, 20);
+        this.lblStatus.TabIndex = 7;
+        this.lblStatus.Text = "Ready";
+        // 
         // MainForm
         // 
         this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-        this.ClientSize = new System.Drawing.Size(570, 370);
+        this.ClientSize = new System.Drawing.Size(570, 380);
         this.Controls.Add(this.btnSelectImage);
         this.Controls.Add(this.pictureBoxPreview);
         this.Controls.Add(this.comboBoxTagMethod);
         this.Controls.Add(this.btnTagImage);
         this.Controls.Add(this.listBoxTags);
         this.Controls.Add(this.btnSaveTags);
+        this.Controls.Add(this.progressBar);
+        this.Controls.Add(this.lblStatus);
         this.Name = "MainForm";
         this.Text = "Image Tagger";
         ((System.ComponentModel.ISupportInitialize)(this.pictureBoxPreview)).EndInit();
         this.ResumeLayout(false);
+        this.PerformLayout();
     }
 
     #endregion
@@ -121,4 +143,6 @@ partial class MainForm
     private System.Windows.Forms.Button btnTagImage;
     private System.Windows.Forms.ListBox listBoxTags;
     private System.Windows.Forms.Button btnSaveTags;
+    private System.Windows.Forms.ProgressBar progressBar;
+    private System.Windows.Forms.Label lblStatus;
 }

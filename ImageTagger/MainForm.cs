@@ -7,169 +7,388 @@ using Microsoft.ML.Data;
 using System.IO;
 using System.Linq;
 using Microsoft.ML.OnnxRuntime;
+using System.Text;
+using System.Net.Http;
+using System.Threading.Tasks;
+using MetadataExtractor;
+using MetadataExtractor.Formats.Exif;
+using MetadataExtractor.Formats.Iptc;
+using MetadataExtractor.Formats.Xmp;
+using System.Text.Json;
+using System.ComponentModel;
+using ImageTagger.Core.Interfaces;
+using ImageTagger.Core.Models;
+using ImageTagger.Core.Configuration;
+using ImageTagger.Services;
+using ImageTagger.Infrastructure;
+using Microsoft.Extensions.Configuration;
+using LogLevel = ImageTagger.Core.Interfaces.LogLevel;
 
-namespace ImageTagger
+namespace ImageTagger;
+
+public partial class MainForm : Form
 {
-    public partial class MainForm : Form
+    private string? selectedImagePath;
+    private List<string> currentTags = new();
+    private bool isProcessing = false;
+
+    // Services
+    private readonly ILoggingService _loggingService;
+    private readonly IMetadataService _metadataService;
+    private readonly List<IImageTaggingService> _taggingServices;
+    private readonly AppSettings _settings;
+
+    public MainForm()
     {
-        private string selectedImagePath;
-        private List<string> currentTags = new List<string>();
+        InitializeComponent();
+        
+        // Load configuration
+        _settings = LoadConfiguration();
+        
+        // Initialize services
+        _loggingService = new FileLoggingService();
+        _metadataService = new MetadataService(_loggingService, _settings.Metadata.CreateBackups, _settings.Metadata.SupportedFormats);
+        
+        // Initialize tagging services
+        _taggingServices = InitializeTaggingServices();
+        
+        InitializeUI();
+        VerifyOnnxModel();
+        _loggingService.Log("Application started successfully");
+    }
 
-        // ML.NET model/label paths
-        private static readonly string ModelPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "resnet50-v1-12.onnx");
-        private static readonly string LabelsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "imagenet_classes.txt");
-        private static readonly int ImageWidth = 224;
-        private static readonly int ImageHeight = 224;
-
-        public MainForm()
+    private AppSettings LoadConfiguration()
+    {
+        try
         {
-            InitializeComponent();
-            comboBoxTagMethod.SelectedIndex = 0;
-            // Removed PrintOnnxModelInfo from constructor
+            var configuration = new ConfigurationBuilder()
+                .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                .Build();
+
+            var settings = new AppSettings();
+            configuration.Bind(settings);
+
+            // Set default model paths if not configured
+            if (string.IsNullOrEmpty(settings.Model.ModelPath))
+            {
+                settings.Model.ModelPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "resnet50-v1-12.onnx");
+            }
+            if (string.IsNullOrEmpty(settings.Model.LabelsPath))
+            {
+                settings.Model.LabelsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models", "imagenet_classes.txt");
+            }
+
+            return settings;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to load configuration: {ex.Message}", "Configuration Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return new AppSettings();
+        }
+    }
+
+    private List<IImageTaggingService> InitializeTaggingServices()
+    {
+        var services = new List<IImageTaggingService>();
+
+        // Add ML.NET service
+        services.Add(new MLNetTaggingService(
+            _loggingService,
+            _settings.Model.ModelPath,
+            _settings.Model.LabelsPath,
+            maxTags: _settings.Model.MaxTags,
+            confidenceThreshold: _settings.Model.ConfidenceThreshold));
+
+        // Add Cloud API service
+        services.Add(new CloudApiTaggingService(
+            _loggingService,
+            _settings.CloudApi.Endpoint,
+            _settings.CloudApi.ApiKey,
+            _settings.CloudApi.TimeoutSeconds));
+
+        return services;
+    }
+
+    private void InitializeUI()
+    {
+        comboBoxTagMethod.Items.Clear();
+        foreach (var service in _taggingServices)
+        {
+            comboBoxTagMethod.Items.Add(service.ServiceName);
+        }
+        comboBoxTagMethod.SelectedIndex = 0;
+        
+        // Add progress bar and status label if they don't exist
+        if (!Controls.Contains(progressBar))
+        {
+            progressBar = new ProgressBar
+            {
+                Location = new Point(12, 300),
+                Size = new Size(400, 23),
+                Visible = false
+            };
+            Controls.Add(progressBar);
         }
 
-        private void PrintOnnxModelInfo(string modelPath)
+        if (!Controls.Contains(lblStatus))
         {
-            try
+            lblStatus = new Label
             {
-                using var session = new InferenceSession(modelPath);
-                Console.WriteLine("ONNX Model Inputs:");
-                foreach (var input in session.InputMetadata)
-                    Console.WriteLine($"  {input.Key} : {input.Value.ElementType} [{string.Join(",", input.Value.Dimensions)}]");
-                Console.WriteLine("ONNX Model Outputs:");
-                foreach (var output in session.OutputMetadata)
-                    Console.WriteLine($"  {output.Key} : {output.Value.ElementType} [{string.Join(",", output.Value.Dimensions)}]");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error inspecting ONNX model: {ex.Message}");
-            }
+                Location = new Point(12, 330),
+                Size = new Size(400, 20),
+                Text = "Ready"
+            };
+            Controls.Add(lblStatus);
+        }
+    }
+
+
+
+    private void UpdateStatus(string message, bool showProgress = false)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action(() => UpdateStatus(message, showProgress)));
+            return;
         }
 
-        private void btnSelectImage_Click(object sender, EventArgs e)
+        lblStatus.Text = message;
+        progressBar.Visible = showProgress;
+        if (showProgress)
         {
-            using (OpenFileDialog ofd = new OpenFileDialog())
-            {
-                ofd.Filter = "Image Files|*.jpg;*.jpeg;*.png;*.bmp;*.gif";
-                if (ofd.ShowDialog() == DialogResult.OK)
-                {
-                    selectedImagePath = ofd.FileName;
-                    pictureBoxPreview.Image = Image.FromFile(selectedImagePath);
-                    listBoxTags.Items.Clear();
-                    currentTags.Clear();
-                }
-            }
+            progressBar.Style = ProgressBarStyle.Marquee;
         }
+        _loggingService.Log($"Status: {message}");
+    }
 
-        private async void btnTagImage_Click(object sender, EventArgs e)
+    private void VerifyOnnxModel()
+    {
+        try
         {
-            if (string.IsNullOrEmpty(selectedImagePath))
+            if (!File.Exists(_settings.Model.ModelPath))
             {
-                MessageBox.Show("Please select an image first.");
+                var errorMsg = $"ONNX model not found at: {_settings.Model.ModelPath}";
+                _loggingService.Log(errorMsg, LogLevel.Error);
+                MessageBox.Show(errorMsg, "Model Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+
+            using var session = new Microsoft.ML.OnnxRuntime.InferenceSession(_settings.Model.ModelPath);
+            var outputs = session.OutputMetadata;
+            string outputInfo = string.Join("\n", outputs.Select(o => $"{o.Key}: {o.Value.ElementType} [{string.Join(",", o.Value.Dimensions)}]"));
+            _loggingService.Log($"ONNX Model Verification:\n{outputInfo}");
+
+            // Log the available output columns for debugging
+            _loggingService.Log($"Available ONNX output columns: {string.Join(", ", outputs.Keys)}");
+
+            if (outputs.Count == 0)
+            {
+                var errorMsg = $"No output columns found in ONNX model.\nModel outputs:\n{outputInfo}";
+                _loggingService.Log(errorMsg, LogLevel.Error);
+                MessageBox.Show(errorMsg, "ONNX Model Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // The model uses 'resnetv17_dense0_fwd' instead of 'probabilities'
+            if (!outputs.ContainsKey("probabilities") && !outputs.ContainsKey("resnetv17_dense0_fwd"))
+            {
+                var warningMsg = $"Warning: Expected output column 'probabilities' or 'resnetv17_dense0_fwd' not found.\nModel outputs:\n{outputInfo}";
+                _loggingService.Log(warningMsg, LogLevel.Warning);
+                MessageBox.Show(warningMsg, "ONNX Model Verification", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            var errorMsg = $"Failed to verify ONNX model: {ex.Message}";
+            _loggingService.Log(errorMsg, LogLevel.Error);
+            MessageBox.Show(errorMsg, "Model Verification Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void btnSelectImage_Click(object sender, EventArgs e)
+    {
+        try
+        {
+            using var ofd = new OpenFileDialog
+            {
+                Filter = "Image Files|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tiff;*.tif",
+                Title = "Select an image to tag"
+            };
+
+            if (ofd.ShowDialog() == DialogResult.OK)
+            {
+                selectedImagePath = ofd.FileName;
+
+                // Validate file exists and is readable
+                if (!File.Exists(selectedImagePath))
+                {
+                    throw new FileNotFoundException("Selected file does not exist.");
+                }
+
+                // Load and display image with error handling
+                try
+                {
+                    using var image = Image.FromFile(selectedImagePath);
+                    pictureBoxPreview.Image = new Bitmap(image);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Failed to load image: {ex.Message}");
+                }
+
+                listBoxTags.Items.Clear();
+                currentTags.Clear();
+
+                var fileInfo = new FileInfo(selectedImagePath);
+                _loggingService.Log($"Image selected: {selectedImagePath} ({fileInfo.Length / 1024} KB)");
+                UpdateStatus($"Image loaded: {Path.GetFileName(selectedImagePath)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "Select Image");
+            MessageBox.Show($"Error selecting image:\n{ex.Message}", "Selection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            UpdateStatus("Error selecting image");
+        }
+    }
+
+    private async void btnTagImage_Click(object sender, EventArgs e)
+    {
+        if (isProcessing)
+        {
+            MessageBox.Show("Please wait for the current operation to complete.", "Operation in Progress", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(selectedImagePath))
+        {
+            MessageBox.Show("Please select an image first.", "No Image Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!File.Exists(selectedImagePath))
+        {
+            MessageBox.Show("Selected image file no longer exists.", "File Not Found", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        isProcessing = true;
+        btnTagImage.Enabled = false;
+        btnSaveTags.Enabled = false;
+
+        try
+        {
             listBoxTags.Items.Clear();
             currentTags.Clear();
-            var method = comboBoxTagMethod.SelectedItem.ToString();
-            List<string> tags = new List<string>();
-            if (method == "Cloud API")
+
+            var selectedItem = comboBoxTagMethod.SelectedItem;
+            if (selectedItem == null)
             {
-                // TODO: Call cloud API for tagging
-                tags = await TagImageWithCloudApi(selectedImagePath);
+                MessageBox.Show("Please select a tagging method.", "No Method Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var methodName = selectedItem.ToString();
+            var taggingService = _taggingServices.FirstOrDefault(s => s.ServiceName == methodName);
+            
+            if (taggingService == null)
+            {
+                throw new InvalidOperationException($"Tagging service '{methodName}' not found.");
+            }
+
+            UpdateStatus($"Tagging image using {methodName}...", true);
+
+            var result = await taggingService.TagImageAsync(selectedImagePath);
+
+            if (result.Success && result.Tags.Count > 0)
+            {
+                foreach (var tag in result.Tags)
+                {
+                    listBoxTags.Items.Add($"{tag.Tag} ({tag.Confidence:F2})");
+                    currentTags.Add(tag.Tag);
+                }
+
+                _loggingService.Log($"Successfully generated {result.Tags.Count} tags using {methodName}");
+                UpdateStatus($"Generated {result.Tags.Count} tags successfully");
             }
             else
             {
-                // TODO: Use ML.NET for local tagging
-                tags = await TagImageWithMLNet(selectedImagePath);
+                _loggingService.Log($"No tags generated using {methodName}", LogLevel.Warning);
+                UpdateStatus("No tags generated");
+                MessageBox.Show("No tags were generated for this image.", "No Tags", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-            foreach (var tag in tags)
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "Tag Image");
+            MessageBox.Show($"Error during image tagging:\n{ex.Message}", "Tagging Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            UpdateStatus("Tagging failed");
+        }
+        finally
+        {
+            isProcessing = false;
+            btnTagImage.Enabled = true;
+            btnSaveTags.Enabled = currentTags.Count > 0;
+        }
+    }
+
+    private async void btnSaveTags_Click(object sender, EventArgs e)
+    {
+        if (isProcessing)
+        {
+            MessageBox.Show("Please wait for the current operation to complete.", "Operation in Progress", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(selectedImagePath) || currentTags.Count == 0)
+        {
+            MessageBox.Show("No tags to save. Please tag an image first.", "No Tags", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!File.Exists(selectedImagePath))
+        {
+            MessageBox.Show("Selected image file no longer exists.", "File Not Found", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        isProcessing = true;
+        btnSaveTags.Enabled = false;
+
+        try
+        {
+            UpdateStatus("Saving tags to image metadata...", true);
+
+            var success = await _metadataService.SaveTagsAsync(selectedImagePath, currentTags);
+
+            if (success)
             {
-                listBoxTags.Items.Add(tag);
-                currentTags.Add(tag);
+                _loggingService.Log($"Successfully saved {currentTags.Count} tags to {selectedImagePath}");
+                UpdateStatus("Tags saved successfully");
+                MessageBox.Show($"Successfully saved {currentTags.Count} tags to image metadata.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
-        }
-
-        private void btnSaveTags_Click(object sender, EventArgs e)
-        {
-            if (string.IsNullOrEmpty(selectedImagePath) || currentTags.Count == 0)
+            else
             {
-                MessageBox.Show("No tags to save.");
-                return;
+                throw new InvalidOperationException("Failed to save tags to image metadata.");
             }
-            // TODO: Write tags to image metadata (EXIF/IPTC/XMP)
-            SaveTagsToImage(selectedImagePath, currentTags);
-            MessageBox.Show("Tags saved to image metadata.");
         }
-
-        // Placeholder for cloud API tagging
-        private async System.Threading.Tasks.Task<List<string>> TagImageWithCloudApi(string imagePath)
+        catch (Exception ex)
         {
-            await System.Threading.Tasks.Task.Delay(500); // Simulate async call
-            return new List<string> { "cloud", "tag", "example" };
+            _loggingService.LogException(ex, "Save Tags");
+            MessageBox.Show($"Error saving tags to image:\n{ex.Message}", "Save Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            UpdateStatus("Failed to save tags");
         }
-
-        // Placeholder for ML.NET tagging
-        private async System.Threading.Tasks.Task<List<string>> TagImageWithMLNet(string imagePath)
+        finally
         {
-            // Load labels
-            var labels = File.ReadAllLines(LabelsPath);
-
-            // Create MLContext
-            var mlContext = new MLContext();
-
-            // Define input data
-            var data = new List<ImageInput> { new ImageInput { ImagePath = imagePath } };
-            var imageData = mlContext.Data.LoadFromEnumerable(data);
-
-            // Get ONNX output column name programmatically
-            string outputColumnName = GetOnnxOutputColumnName(ModelPath);
-
-            // Define pipeline
-            var pipeline = mlContext.Transforms.LoadImages(outputColumnName: "data", imageFolder: Path.GetDirectoryName(imagePath), inputColumnName: nameof(ImageInput.ImagePath))
-                .Append(mlContext.Transforms.ResizeImages(outputColumnName: "data", imageWidth: ImageWidth, imageHeight: ImageHeight, inputColumnName: "data"))
-                .Append(mlContext.Transforms.ExtractPixels(outputColumnName: "data"))
-                .Append(mlContext.Transforms.ApplyOnnxModel(
-                    modelFile: ModelPath,
-                    outputColumnNames: new[] { outputColumnName },
-                    inputColumnNames: new[] { "data" }));
-
-            // Fit and transform
-            var model = pipeline.Fit(imageData);
-            var predictionEngine = mlContext.Model.CreatePredictionEngine<ImageInput, ImagePrediction>(model);
-            var prediction = predictionEngine.Predict(new ImageInput { ImagePath = imagePath });
-
-            // Get top 3 predictions
-            var topK = prediction.PredictedLabels
-                .Select((score, index) => new { Label = labels[index], Score = score })
-                .OrderByDescending(x => x.Score)
-                .Take(3)
-                .Select(x => x.Label)
-                .ToList();
-
-            return topK;
+            isProcessing = false;
+            btnSaveTags.Enabled = currentTags.Count > 0;
         }
+    }
 
-        private string GetOnnxOutputColumnName(string modelPath)
-        {
-            using var session = new InferenceSession(modelPath);
-            // Return the first output column name
-            return session.OutputMetadata.Keys.First();
-        }
-
-        public class ImageInput
-        {
-            public string ImagePath { get; set; }
-        }
-
-        public class ImagePrediction
-        {
-            public float[] PredictedLabels { get; set; }
-        }
-
-        // Placeholder for writing tags to image metadata
-        private void SaveTagsToImage(string imagePath, List<string> tags)
-        {
-            // TODO: Implement metadata writing using MetadataExtractor or other library
-        }
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _loggingService.Log("Application closing");
+        base.OnFormClosing(e);
     }
 }
