@@ -42,7 +42,8 @@ public class HuggingFaceModelService
             else
             {
                 // Default search for vision models - broader and more likely to find results
-                searchTerms.AddRange(new[] { "vision", "image", "classification" });
+                // Focus on image classification without format restrictions
+                searchTerms.AddRange(new[] { "image-classification", "vision", "classification" });
             }
             
             var searchQuery = string.Join(" ", searchTerms);
@@ -137,7 +138,7 @@ public class HuggingFaceModelService
             {
                 MinDownloads = 100,
                 MaxModelSizeMB = 500,
-                SupportedFormats = new[] { "onnx" },
+                SupportedFormats = new[] { "onnx", "pytorch" }, // Accept both ONNX and PyTorch
                 TaskCategories = new[] { "image-classification", "computer-vision" },
                 ExcludeArchived = true,
                 ExcludePrivate = true,
@@ -179,18 +180,16 @@ public class HuggingFaceModelService
                     searchTerms.AddRange(filterOptions.SearchTerms);
                 }
                 
-                // Search for both ONNX and PyTorch models since we can convert PyTorch to ONNX
-                if (filterOptions.SupportedFormats?.Any() == true)
-                {
-                    // Add ONNX as preferred, but don't restrict to only ONNX
-                    searchTerms.AddRange(filterOptions.SupportedFormats);
-                }
+                // Don't automatically add format restrictions to search terms
+                // This allows us to find both ONNX and PyTorch models
+                // The format filtering happens later in HasCompatibleFiles
                 
                 // Only add broader terms if no user search terms provided
                 if (!searchTerms.Any())
                 {
                     // Use broader terms to find both ONNX and PyTorch models
-                    searchTerms.AddRange(new[] { "vision", "image", "classification" });
+                    // Focus on image classification models without format restrictions
+                    searchTerms.AddRange(new[] { "image-classification", "vision", "classification" });
                 }
                 
                 // Combine search terms - use a more flexible approach
