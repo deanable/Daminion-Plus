@@ -548,7 +548,7 @@ public partial class MainForm : Form
         }
     }
 
-    private void btnManageModels_Click(object sender, EventArgs e)
+    private async void btnManageModels_Click(object sender, EventArgs e)
     {
         try
         {
@@ -556,17 +556,7 @@ public partial class MainForm : Form
             modelManagementForm.ShowDialog(this);
             
             // Refresh the model list after the dialog closes
-            _ = Task.Run(async () => 
-            {
-                try
-                {
-                    await RefreshModelList();
-                }
-                catch (Exception ex)
-                {
-                    _loggingService.LogException(ex, "Background RefreshModelList");
-                }
-            });
+            await RefreshModelList();
         }
         catch (Exception ex)
         {
