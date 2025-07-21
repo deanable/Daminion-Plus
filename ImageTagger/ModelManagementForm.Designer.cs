@@ -248,6 +248,26 @@ namespace ImageTagger
             this.tabPageModelZoo.Controls.Add(panelZooButtons);
             this.tabPageModelZoo.Controls.Add(this.listViewModelZoo);
 
+            // Set tab labels
+            this.tabPageInstalled.Text = "Installed Models";
+            this.tabPageRepository.Text = "Repository Models";
+            this.tabPageModelZoo.Text = "Model Zoo";
+
+            // Hook up button event handlers
+            this.buttonEnableDisable.Click += new System.EventHandler(this.buttonEnableDisable_Click);
+            this.buttonValidateModel.Click += new System.EventHandler(this.buttonValidateModel_Click);
+            this.buttonDeleteAllModels.Click += new System.EventHandler(this.buttonDeleteAllModels_Click);
+            this.buttonRefresh.Click += new System.EventHandler(this.buttonRefresh_Click);
+            this.buttonClose.Click += new System.EventHandler(this.buttonClose_Click);
+            this.buttonScanRepository.Click += new System.EventHandler(this.buttonScanRepository_Click);
+            this.buttonDownloadRepositoryModel.Click += new System.EventHandler(this.buttonDownloadRepositoryModel_Click);
+            this.buttonConvertToOnnx.Click += new System.EventHandler(this.buttonConvertToOnnx_Click);
+            this.buttonGenerateLabels.Click += new System.EventHandler(this.buttonGenerateLabels_Click);
+            this.buttonApplyFilters.Click += (s, e) => ApplyRepositoryFilters();
+            this.buttonClearFilters.Click += (s, e) => ClearRepositoryFilters();
+            this.buttonScanModelZoo.Click += new System.EventHandler(this.buttonScanModelZoo_Click);
+            this.buttonDownloadModelZoo.Click += new System.EventHandler(this.buttonDownloadModelZoo_Click);
+
             // Add the main tab control to the form
             this.Controls.Add(this.tabControl);
             this.Text = "Model Management";

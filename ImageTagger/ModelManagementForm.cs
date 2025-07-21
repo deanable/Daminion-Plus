@@ -766,9 +766,14 @@ public partial class ModelManagementForm : Form
         }
         var selectedModel = listViewRepositoryModels.SelectedItems[0].Tag as ModelInfo;
         if (selectedModel == null) return;
-        var modelId = selectedModel.AdditionalProperties.GetValueOrDefault("model_id", "").ToString();
-        if (string.IsNullOrEmpty(modelId))
+        // Robustly extract model ID for conversion
+        var modelId = selectedModel.AdditionalProperties.GetValueOrDefault("model_id", null)
+                   ?? selectedModel.AdditionalProperties.GetValueOrDefault("huggingface_id", null)
+                   ?? selectedModel.AdditionalProperties.GetValueOrDefault("name", null)
+                   ?? selectedModel.Name;
+        if (string.IsNullOrEmpty(modelId?.ToString()))
         {
+            _loggingService.Log($"Invalid model selection: {System.Text.Json.JsonSerializer.Serialize(selectedModel)}", LogLevel.Error);
             MessageBox.Show("Invalid model selection.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
