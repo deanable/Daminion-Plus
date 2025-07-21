@@ -74,6 +74,9 @@ public partial class ModelManagementForm : Form
             item.SubItems.Add(model.Priority.ToString());
             item.SubItems.Add(File.Exists(model.ModelPath) ? "✓" : "✗");
             item.SubItems.Add(File.Exists(model.LabelsPath) ? "✓" : "✗");
+            // Add model type and conversion status columns
+            item.SubItems.Add(model.ModelType.ToString());
+            item.SubItems.Add(model.ConversionStatus.ToString());
             item.Tag = model;
             
             listViewInstalledModels.Items.Add(item);
@@ -643,6 +646,13 @@ public partial class ModelManagementForm : Form
             return;
         }
 
+        // Only allow conversion for PyTorch models that are not yet converted
+        if (selectedModel.ModelType != ModelType.PyTorch || selectedModel.ConversionStatus != ConversionStatus.NotConverted)
+        {
+            MessageBox.Show("Only unconverted PyTorch models can be converted.", "Conversion Not Allowed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
         // Check if conversion is supported
         var isSupported = await _conversionService.IsConversionSupportedAsync(modelId);
         if (!isSupported)
@@ -663,25 +673,36 @@ public partial class ModelManagementForm : Form
             buttonConvertToOnnx.Enabled = false;
             labelRepositoryStatus.Text = $"Converting {selectedModel.DisplayName} to ONNX...";
 
+            // Update status in registry
+            selectedModel.ConversionStatus = ConversionStatus.Converting;
+            await _modelManager.SaveModelRegistryAsync(_currentRegistry!, "models/model_registry.json");
+            UpdateModelList();
+
             // For now, we'll use the model ID directly (in a real implementation, you'd download the PyTorch model first)
             var success = await _conversionService.ConvertPyTorchToOnnxAsync(modelId, "", "");
-            
+
+            // Update model type and conversion status after conversion
             if (success)
             {
+                selectedModel.ModelType = ModelType.Onnx;
+                selectedModel.ConversionStatus = ConversionStatus.Converted;
                 MessageBox.Show($"Successfully converted {selectedModel.DisplayName} to ONNX format", "Conversion Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 labelRepositoryStatus.Text = $"Converted {selectedModel.DisplayName} to ONNX";
-                
-                // Refresh installed models list
-                LoadModelsAsync();
             }
             else
             {
+                selectedModel.ConversionStatus = ConversionStatus.Failed;
                 MessageBox.Show($"Failed to convert {selectedModel.DisplayName} to ONNX format", "Conversion Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 labelRepositoryStatus.Text = "Conversion failed";
             }
+            await _modelManager.SaveModelRegistryAsync(_currentRegistry!, "models/model_registry.json");
+            UpdateModelList();
         }
         catch (Exception ex)
         {
+            selectedModel.ConversionStatus = ConversionStatus.Failed;
+            await _modelManager.SaveModelRegistryAsync(_currentRegistry!, "models/model_registry.json");
+            UpdateModelList();
             _loggingService.LogException(ex, $"Convert to ONNX for {modelId}");
             MessageBox.Show($"Error converting model: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             labelRepositoryStatus.Text = "Conversion error";
@@ -706,10 +727,8 @@ public partial class ModelManagementForm : Form
             buttonConvertToOnnx.Enabled = false;
             return;
         }
-        // Enable only if not ONNX
-        var name = selectedModel.Name?.ToLowerInvariant() ?? "";
-        var isOnnx = name.EndsWith(".onnx") || selectedModel.AdditionalProperties.GetValueOrDefault("framework", "").ToString().ToLowerInvariant() == "onnx";
-        buttonConvertToOnnx.Enabled = !isOnnx;
+        // Enable only if PyTorch and not yet converted
+        buttonConvertToOnnx.Enabled = (selectedModel.ModelType == ModelType.PyTorch && selectedModel.ConversionStatus == ConversionStatus.NotConverted);
     }
 
     private void InitializeComponent()
@@ -801,6 +820,9 @@ public partial class ModelManagementForm : Form
         this.listViewInstalledModels.Columns.Add("Priority", 60);
         this.listViewInstalledModels.Columns.Add("Model File", 80);
         this.listViewInstalledModels.Columns.Add("Labels File", 80);
+        // Add columns for model type and conversion status
+        this.listViewInstalledModels.Columns.Add("Type", 80);
+        this.listViewInstalledModels.Columns.Add("Conversion", 100);
         this.listViewInstalledModels.SelectedIndexChanged += listViewInstalledModels_SelectedIndexChanged;
         
         // Available Models ListView

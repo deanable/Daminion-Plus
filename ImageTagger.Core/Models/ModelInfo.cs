@@ -1,5 +1,20 @@
 namespace ImageTagger.Core.Models;
 
+public enum ModelType
+{
+    Unknown = 0,
+    Onnx = 1,
+    PyTorch = 2
+}
+
+public enum ConversionStatus
+{
+    NotConverted = 0,
+    Converting = 1,
+    Converted = 2,
+    Failed = 3
+}
+
 public class ModelInfo
 {
     public string Name { get; set; } = string.Empty;
@@ -16,6 +31,10 @@ public class ModelInfo
     public bool IsEnabled { get; set; } = true;
     public int Priority { get; set; } = 0; // Higher number = higher priority
     public Dictionary<string, object> AdditionalProperties { get; set; } = new();
+
+    // New fields for type and conversion status
+    public ModelType ModelType { get; set; } = ModelType.Unknown;
+    public ConversionStatus ConversionStatus { get; set; } = ConversionStatus.NotConverted;
 }
 
 public class ModelRegistry

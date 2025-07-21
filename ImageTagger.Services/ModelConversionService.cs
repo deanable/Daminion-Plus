@@ -40,14 +40,23 @@ public class ModelConversionService
             // Execute conversion
             var success = await ExecuteConversionScriptAsync(scriptPath);
             
-            if (success)
+            // Validate ONNX and label files after conversion
+            var onnxPath = Path.Combine(outputPath, "model.onnx");
+            var labelsPath = Path.Combine(outputPath, "labels.txt");
+            var validationSuccess = success && await ValidateOnnxAndLabelsAsync(onnxPath, labelsPath);
+
+            if (validationSuccess)
             {
-                _loggingService.Log($"Successfully converted {modelId} to ONNX format");
+                _loggingService.Log($"Successfully converted {modelId} to ONNX format and validated files");
                 return true;
             }
             else
             {
-                _loggingService.Log($"Failed to convert {modelId} to ONNX format", LogLevel.Warning);
+                if (!File.Exists(onnxPath))
+                    _loggingService.Log($"ONNX file missing after conversion: {onnxPath}", LogLevel.Error);
+                if (!File.Exists(labelsPath))
+                    _loggingService.Log($"Labels file missing after conversion: {labelsPath}", LogLevel.Error);
+                _loggingService.Log($"Failed to validate ONNX or label files for {modelId}", LogLevel.Warning);
                 return false;
             }
         }
@@ -189,6 +198,47 @@ if __name__ == '__main__':
         catch (Exception ex)
         {
             _loggingService.LogException(ex, "ExecuteConversionScriptAsync");
+            return false;
+        }
+    }
+
+    private async Task<bool> ValidateOnnxAndLabelsAsync(string onnxPath, string labelsPath)
+    {
+        try
+        {
+            if (!File.Exists(onnxPath) || !File.Exists(labelsPath))
+                return false;
+
+            // Try to load ONNX model
+            try
+            {
+                using var session = new Microsoft.ML.OnnxRuntime.InferenceSession(onnxPath);
+                var inputMetadata = session.InputMetadata;
+                var outputMetadata = session.OutputMetadata;
+                if (inputMetadata.Count == 0 || outputMetadata.Count == 0)
+                {
+                    _loggingService.Log($"ONNX model has no inputs or outputs: {onnxPath}", LogLevel.Error);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogException(ex, $"ONNX validation failed: {onnxPath}");
+                return false;
+            }
+
+            // Check labels file is not empty
+            var labels = await File.ReadAllLinesAsync(labelsPath);
+            if (labels.Length == 0)
+            {
+                _loggingService.Log($"Labels file is empty: {labelsPath}", LogLevel.Error);
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _loggingService.LogException(ex, "ValidateOnnxAndLabelsAsync");
             return false;
         }
     }
