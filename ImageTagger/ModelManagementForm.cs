@@ -17,6 +17,8 @@ public partial class ModelManagementForm : Form
     private List<ModelInfo> _allRepositoryModels = new();
     private List<ModelInfo> _filteredRepositoryModels = new();
     private bool _isScanning = false;
+    private Button? buttonDeleteAllModels;
+    private Button? buttonGenerateLabels;
 
     public ModelManagementForm(ILoggingService loggingService)
     {
@@ -29,6 +31,9 @@ public partial class ModelManagementForm : Form
         _conversionService = new ModelConversionService(loggingService);
         
         LoadModelsAsync();
+        // Add event handlers for new buttons
+        buttonDeleteAllModels!.Click += buttonDeleteAllModels_Click;
+        buttonGenerateLabels!.Click += buttonGenerateLabels_Click;
     }
 
     private async void LoadModelsAsync()
@@ -36,17 +41,51 @@ public partial class ModelManagementForm : Form
         try
         {
             Cursor = Cursors.WaitCursor;
-            
+
             // Load current registry
-            _currentRegistry = await _modelManager.LoadModelRegistryAsync("models/model_registry.json");
-            
-            // Load available models from repository (basic list for now)
-            var availableModels = await _modelDownloader.GetAvailableModelsFromRepositoryAsync();
-            
+            _currentRegistry = _modelManager.LoadModelRegistryAsync("models/model_registry.json").Result;
+
+            // Remove models from registry that are missing on disk
+            if (_currentRegistry != null)
+            {
+                var modelsToRemove = _currentRegistry.Models.Where(m => !File.Exists(m.ModelPath) || !File.Exists(m.LabelsPath)).ToList();
+                foreach (var m in modelsToRemove)
+                {
+                    _currentRegistry.Models.Remove(m);
+                }
+                // Save registry if any were removed
+                if (modelsToRemove.Count > 0)
+                    _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json").Wait();
+            }
+
+            // Build available models list from disk
+            var availableModels = new List<ModelInfo>();
+            var modelsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
+            if (Directory.Exists(modelsDir))
+            {
+                foreach (var dir in Directory.GetDirectories(modelsDir))
+                {
+                    var modelFiles = Directory.GetFiles(dir, "*.onnx").Concat(Directory.GetFiles(dir, "*.pt")).ToList();
+                    var labelsFiles = Directory.GetFiles(dir, "labels.txt").ToList();
+                    if (modelFiles.Count > 0 && labelsFiles.Count > 0)
+                    {
+                        var modelInfo = new ModelInfo
+                        {
+                            Name = Path.GetFileName(dir),
+                            DisplayName = Path.GetFileName(dir),
+                            ModelPath = modelFiles[0],
+                            LabelsPath = labelsFiles[0],
+                            // Set other properties as needed
+                        };
+                        availableModels.Add(modelInfo);
+                    }
+                }
+            }
+
             // Update UI
             UpdateModelList();
             UpdateAvailableModelsList(availableModels);
-            
+
             _loggingService.Log("Model management form loaded successfully");
         }
         catch (Exception ex)
@@ -60,11 +99,25 @@ public partial class ModelManagementForm : Form
         }
     }
 
+    private bool IsModelUsable(ModelInfo model)
+    {
+        // Model is usable if it has a model file and a valid, non-generic labels file
+        if (!File.Exists(model.ModelPath) || !File.Exists(model.LabelsPath))
+            return false;
+        var labels = File.ReadAllLines(model.LabelsPath);
+        if (labels.Length == 0)
+            return false;
+        // Check for generic fallback labels (class_0000, etc.)
+        if (labels.Length == 1000 && labels[0].StartsWith("class_"))
+            return false;
+        return true;
+    }
+
     private void UpdateModelList()
     {
         if (_currentRegistry == null) return;
 
-        listViewInstalledModels.Items.Clear();
+        listViewInstalledModels?.Items.Clear();
         
         foreach (var model in _currentRegistry.Models.OrderByDescending(m => m.Priority))
         {
@@ -72,26 +125,32 @@ public partial class ModelManagementForm : Form
             item.SubItems.Add(model.Name);
             item.SubItems.Add(model.IsEnabled ? "Enabled" : "Disabled");
             item.SubItems.Add(model.Priority.ToString());
-            item.SubItems.Add(File.Exists(model.ModelPath) ? "✓" : "✗");
-            item.SubItems.Add(File.Exists(model.LabelsPath) ? "✓" : "✗");
+            item.SubItems.Add(File.Exists(model.ModelPath) ? "\u2713" : "\u2717");
+            item.SubItems.Add(File.Exists(model.LabelsPath) ? "\u2713" : "\u2717");
             // Add model type and conversion status columns
             item.SubItems.Add(model.ModelType.ToString());
             item.SubItems.Add(model.ConversionStatus.ToString());
             item.Tag = model;
-            
-            listViewInstalledModels.Items.Add(item);
+            // Gray out if not usable
+            if (!IsModelUsable(model))
+            {
+                item.ForeColor = Color.Gray;
+                item.BackColor = Color.LightGray;
+                item.ToolTipText = "Model is not usable: missing or invalid labels file.";
+            }
+            listViewInstalledModels?.Items.Add(item);
         }
 
         // Update default model selection
         if (!string.IsNullOrEmpty(_currentRegistry.DefaultModelName))
         {
-            comboBoxDefaultModel.Text = _currentRegistry.DefaultModelName;
+            comboBoxDefaultModel?.Text = _currentRegistry.DefaultModelName;
         }
     }
 
     private void UpdateAvailableModelsList(List<ModelInfo> availableModels)
     {
-        listViewAvailableModels.Items.Clear();
+        listViewAvailableModels?.Items.Clear();
         
         foreach (var model in availableModels)
         {
@@ -101,13 +160,13 @@ public partial class ModelManagementForm : Form
             item.SubItems.Add(model.License);
             item.Tag = model;
             
-            listViewAvailableModels.Items.Add(item);
+            listViewAvailableModels?.Items.Add(item);
         }
     }
 
     private void UpdateRepositoryModelsList()
     {
-        listViewRepositoryModels.Items.Clear();
+        listViewRepositoryModels?.Items.Clear();
         
         foreach (var model in _filteredRepositoryModels)
         {
@@ -119,48 +178,62 @@ public partial class ModelManagementForm : Form
             item.SubItems.Add(model.Priority.ToString());
             item.SubItems.Add(model.Description ?? "");
             item.Tag = model;
-            
-            listViewRepositoryModels.Items.Add(item);
+            // Gray out if not usable
+            if (!IsModelUsable(model))
+            {
+                item.ForeColor = Color.Gray;
+                item.BackColor = Color.LightGray;
+                item.ToolTipText = "Model is not usable: missing or invalid labels file.";
+            }
+            listViewRepositoryModels?.Items.Add(item);
         }
 
-        labelRepositoryStatus.Text = $"Models: {_filteredRepositoryModels.Count} found";
+        labelRepositoryStatus?.Text = $"Models: {_filteredRepositoryModels.Count} found";
     }
 
-    private async void buttonScanRepository_Click(object sender, EventArgs e)
+    private async void buttonScanRepository_Click(object? sender, EventArgs e)
     {
         if (_isScanning) return;
 
         _isScanning = true;
-        buttonScanRepository.Enabled = false;
-        progressBarRepository.Visible = true;
-        labelRepositoryStatus.Text = "Scanning Hugging Face repository...";
+        buttonScanRepository?.Enabled = false;
+        progressBarRepository?.Visible = true;
+        labelRepositoryStatus?.Text = "Scanning Hugging Face repository...";
 
         try
         {
             var filterOptions = GetFilterOptions();
             _allRepositoryModels = await _hfService.LoadEntireRepositoryAsync(filterOptions);
             
-            labelRepositoryStatus.Text = $"Found {_allRepositoryModels.Count} models";
+            labelRepositoryStatus?.Text = $"Found {_allRepositoryModels.Count} models";
             ApplyRepositoryFilters();
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, "Scan repository");
             MessageBox.Show($"Failed to scan repository: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            labelRepositoryStatus.Text = "Scan failed";
+            labelRepositoryStatus?.Text = "Scan failed";
         }
         finally
         {
-            progressBarRepository.Visible = false;
-            buttonScanRepository.Enabled = true;
+            progressBarRepository?.Visible = false;
+            buttonScanRepository?.Enabled = true;
             _isScanning = false;
         }
     }
 
     private ModelFilterOptions GetFilterOptions()
     {
-        // Get license selection from combobox
-        var licenseText = comboBoxLicenses.SelectedItem?.ToString() ?? "Apache 2.0, MIT, BSD";
+        int minDownloads = trackBarMinDownloads != null ? trackBarMinDownloads.Value : 100;
+        int maxSize = trackBarMaxSize != null ? trackBarMaxSize.Value : 500;
+        int minLikes = trackBarMinLikes != null ? trackBarMinLikes.Value : 0;
+        int maxModels = trackBarMaxModels != null ? trackBarMaxModels.Value : 100;
+        bool excludeArchived = checkBoxExcludeArchived != null ? checkBoxExcludeArchived.Checked : true;
+        bool excludePrivate = checkBoxExcludePrivate != null ? checkBoxExcludePrivate.Checked : true;
+        bool onlyVerified = checkBoxOnlyVerified != null ? checkBoxOnlyVerified.Checked : false;
+        bool preferImageNet = checkBoxPreferImageNet != null ? checkBoxPreferImageNet.Checked : true;
+        string[] searchTerms = (textBoxSearchTerms != null && textBoxSearchTerms.Text != null) ? textBoxSearchTerms.Text.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToArray() : new string[0];
+        var licenseText = comboBoxLicenses != null && comboBoxLicenses.SelectedItem != null ? comboBoxLicenses.SelectedItem.ToString() : "Apache 2.0, MIT, BSD";
         var licenses = licenseText switch
         {
             "All Licenses" => new string[0],
@@ -171,19 +244,18 @@ public partial class ModelManagementForm : Form
             "Apache 2.0, MIT, BSD" => new[] { "apache-2.0", "mit", "bsd" },
             _ => new string[0]
         };
-
         return new ModelFilterOptions
         {
-            MinDownloads = trackBarMinDownloads.Value,
-            MaxModelSizeMB = trackBarMaxSize.Value,
-            MinLikes = trackBarMinLikes.Value,
-            MaxModels = trackBarMaxModels.Value,
-            ExcludeArchived = checkBoxExcludeArchived.Checked,
-            ExcludePrivate = checkBoxExcludePrivate.Checked,
-            OnlyVerified = checkBoxOnlyVerified.Checked,
-            PreferImageNetLabels = checkBoxPreferImageNet.Checked,
+            MinDownloads = minDownloads,
+            MaxModelSizeMB = maxSize,
+            MinLikes = minLikes,
+            MaxModels = maxModels,
+            ExcludeArchived = excludeArchived,
+            ExcludePrivate = excludePrivate,
+            OnlyVerified = onlyVerified,
+            PreferImageNetLabels = preferImageNet,
             Licenses = licenses,
-            SearchTerms = textBoxSearchTerms.Text?.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToArray(),
+            SearchTerms = searchTerms,
             SupportedFormats = new[] { "onnx" },
             TaskCategories = new[] { "image-classification", "computer-vision" },
             SortBy = "downloads",
@@ -201,13 +273,13 @@ public partial class ModelManagementForm : Form
             var license = model.License?.ToLowerInvariant() ?? "";
 
             // Check downloads
-            if (downloads is int d && d < trackBarMinDownloads.Value) return false;
+            if (downloads is int d && d < (trackBarMinDownloads != null ? trackBarMinDownloads.Value : 100)) return false;
 
             // Check likes
-            if (likes is int l && l < trackBarMinLikes.Value) return false;
+            if (likes is int l && l < (trackBarMinLikes != null ? trackBarMinLikes.Value : 0)) return false;
 
             // Check license
-            var licenseText = comboBoxLicenses.SelectedItem?.ToString() ?? "Apache 2.0, MIT, BSD";
+            var licenseText = comboBoxLicenses?.SelectedItem?.ToString() ?? "Apache 2.0, MIT, BSD";
             if (licenseText != "All Licenses" && !string.IsNullOrEmpty(license))
             {
                 var allowedLicenses = licenseText switch
@@ -231,131 +303,137 @@ public partial class ModelManagementForm : Form
 
         private void ClearRepositoryFilters()
     {
-        trackBarMinDownloads.Value = 100;
-        trackBarMaxSize.Value = 500;
-        trackBarMinLikes.Value = 0;
-        trackBarMaxModels.Value = 100;
-        comboBoxLicenses.SelectedIndex = 5; // "Apache 2.0, MIT, BSD"
-        textBoxSearchTerms.Text = "vision,image,classification";
-        checkBoxExcludeArchived.Checked = true;
-        checkBoxExcludePrivate.Checked = true;
-        checkBoxOnlyVerified.Checked = false;
-        checkBoxPreferImageNet.Checked = true;
+        if (trackBarMinDownloads != null) trackBarMinDownloads.Value = 100;
+        if (trackBarMaxSize != null) trackBarMaxSize.Value = 500;
+        if (trackBarMinLikes != null) trackBarMinLikes.Value = 0;
+        if (trackBarMaxModels != null) trackBarMaxModels.Value = 100;
+        if (comboBoxLicenses != null) comboBoxLicenses.SelectedIndex = 5; // "Apache 2.0, MIT, BSD"
+        if (textBoxSearchTerms != null) textBoxSearchTerms.Text = "vision,image,classification";
+        if (checkBoxExcludeArchived != null) checkBoxExcludeArchived.Checked = true;
+        if (checkBoxExcludePrivate != null) checkBoxExcludePrivate.Checked = true;
+        if (checkBoxOnlyVerified != null) checkBoxOnlyVerified.Checked = false;
+        if (checkBoxPreferImageNet != null) checkBoxPreferImageNet.Checked = true;
         
         ApplyRepositoryFilters();
     }
 
-    private async void buttonDownloadRepositoryModel_Click(object sender, EventArgs e)
+    private async void buttonDownloadRepositoryModel_Click(object? sender, EventArgs e)
     {
-        if (listViewRepositoryModels.SelectedItems.Count == 0)
+        if (listViewRepositoryModels?.SelectedItems.Count == 0)
         {
             MessageBox.Show("Please select at least one model to download.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        var selectedModels = listViewRepositoryModels.SelectedItems.Cast<ListViewItem>()
+        var selectedModels = listViewRepositoryModels?.SelectedItems.Cast<ListViewItem>()
             .Select(item => item.Tag as ModelInfo)
             .Where(model => model != null)
             .ToList();
 
         var result = MessageBox.Show(
-            $"Download {selectedModels.Count} selected models? This may take some time.",
+            $"Download {(selectedModels != null ? selectedModels.Count : 0)} selected models? This may take some time.",
             "Confirm Download",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question);
 
         if (result != DialogResult.Yes) return;
 
-        progressBarRepository.Visible = true;
-        progressBarRepository.Style = ProgressBarStyle.Continuous;
-        progressBarRepository.Maximum = selectedModels.Count;
+        progressBarRepository?.Visible = true;
+        progressBarRepository?.Style = ProgressBarStyle.Continuous;
+        progressBarRepository?.Maximum = (selectedModels != null ? selectedModels.Count : 0);
 
         try
         {
             var successCount = 0;
-            for (int i = 0; i < selectedModels.Count; i++)
+            for (int i = 0; i < (selectedModels != null ? selectedModels.Count : 0); i++)
             {
-                var model = selectedModels[i];
-                labelRepositoryStatus.Text = $"Downloading {model!.DisplayName}...";
-                progressBarRepository.Value = i;
+                var model = selectedModels?[i];
+                labelRepositoryStatus?.Text = $"Downloading {model?.DisplayName}...";
+                progressBarRepository?.Value = i;
 
                 try
                 {
-                    var huggingfaceId = model.AdditionalProperties.GetValueOrDefault("huggingface_id", "").ToString();
+                    var huggingfaceId = model?.AdditionalProperties.GetValueOrDefault("huggingface_id", "").ToString();
                     if (!string.IsNullOrEmpty(huggingfaceId))
                     {
                         var success = await _hfService.DownloadModelAsync(huggingfaceId);
                         if (success)
                         {
                             successCount++;
-                            _loggingService.Log($"Successfully downloaded model: {model.DisplayName}");
+                            _loggingService.Log($"Successfully downloaded model: {model?.DisplayName}");
                             // Add to registry
                             var modelPath = Path.Combine("models", huggingfaceId.Replace("/", "-"));
-                            var modelInfo = await _modelDownloader.CreateModelInfoFromDownloadedAsync(model.Name, modelPath);
-                            _currentRegistry!.Models.Add(modelInfo);
-                            await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
+                            var modelInfo = await _modelDownloader.CreateModelInfoFromDownloadedAsync(model?.Name ?? "", modelPath);
+                            if (_currentRegistry != null)
+                                _currentRegistry.Models.Add(modelInfo);
+                            if (_currentRegistry != null)
+                                await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
                             // Prompt for ONNX conversion if needed
-                            var isOnnx = model.Name.ToLowerInvariant().EndsWith(".onnx") || model.AdditionalProperties.GetValueOrDefault("framework", "").ToString().ToLowerInvariant() == "onnx";
+                            var isOnnx = (model != null && model.Name != null && model.Name.ToLowerInvariant().EndsWith(".onnx")) || (model != null && model.AdditionalProperties.GetValueOrDefault("framework", "").ToString().ToLowerInvariant() == "onnx");
                             if (!isOnnx)
                             {
-                                var convertResult = MessageBox.Show($"Model '{model.DisplayName}' is not in ONNX format. Would you like to convert it now?", "Convert to ONNX", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                                var convertResult = MessageBox.Show($"Model '{model?.DisplayName}' is not in ONNX format. Would you like to convert it now?", "Convert to ONNX", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                                 if (convertResult == DialogResult.Yes)
                                 {
                                     // Select the model in the list and trigger conversion
-                                    foreach (ListViewItem item in listViewRepositoryModels.Items)
+                                    var items = listViewRepositoryModels != null ? listViewRepositoryModels.Items : null;
+                                    if (items != null)
                                     {
-                                        if (item.Tag is ModelInfo mi && mi.Name == model.Name)
+                                        foreach (ListViewItem item in items)
                                         {
-                                            item.Selected = true;
-                                            break;
+                                            if (item.Tag is ModelInfo mi && mi.Name == model?.Name)
+                                            {
+                                                item.Selected = true;
+                                                break;
+                                            }
                                         }
                                     }
-                                    buttonConvertToOnnx.PerformClick();
+                                    buttonConvertToOnnx?.PerformClick();
                                 }
                             }
                         }
                         else
                         {
-                            _loggingService.Log($"Failed to download model: {model.DisplayName}", LogLevel.Warning);
+                            _loggingService.Log($"Failed to download model: {model?.DisplayName}", LogLevel.Warning);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _loggingService.LogException(ex, $"Download model {model.DisplayName}");
+                    _loggingService.LogException(ex, $"Download model {model?.DisplayName}");
                 }
                 await Task.Delay(500);
             }
-            labelRepositoryStatus.Text = $"Download complete: {successCount}/{selectedModels.Count} models downloaded successfully";
-            MessageBox.Show($"Download complete!\n{successCount} out of {selectedModels.Count} models downloaded successfully.", "Download Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            UpdateModelList();
+            labelRepositoryStatus?.Text = $"Download complete: {successCount}/{(selectedModels != null ? selectedModels.Count : 0)} models downloaded successfully";
+            MessageBox.Show($"Download complete!\n{successCount} out of {(selectedModels != null ? selectedModels.Count : 0)} models downloaded successfully.", "Download Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            LoadModelsAsync();
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, "Download selected models");
             MessageBox.Show($"Download failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            labelRepositoryStatus.Text = "Download failed";
+            labelRepositoryStatus?.Text = "Download failed";
         }
         finally
         {
-            progressBarRepository.Visible = false;
+            progressBarRepository?.Visible = false;
         }
     }
 
-    private async void buttonDownloadModel_Click(object sender, EventArgs e)
+    private async void buttonDownloadModel_Click(object? sender, EventArgs e)
     {
-        if (listViewAvailableModels.SelectedItems.Count == 0)
+        if (listViewAvailableModels?.SelectedItems.Count == 0)
         {
             MessageBox.Show("Please select a model to download.", "No Model Selected", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        var selectedModel = (ModelInfo)listViewAvailableModels.SelectedItems[0].Tag;
+        var selectedModel = (ModelInfo)(listViewAvailableModels != null && listViewAvailableModels.SelectedItems.Count > 0 ? listViewAvailableModels.SelectedItems[0].Tag! : new ModelInfo());
         
         try
         {
             Cursor = Cursors.WaitCursor;
-            buttonDownloadModel.Enabled = false;
+            buttonDownloadModel?.Enabled = false;
             
             _loggingService.Log($"Starting download of model: {selectedModel.Name}");
             
@@ -381,8 +459,9 @@ public partial class ModelManagementForm : Form
                 {
                     // Add to registry
                     var modelInfo = await _modelDownloader.CreateModelInfoFromDownloadedAsync(selectedModel.Name, modelPath);
-                    _currentRegistry!.Models.Add(modelInfo);
-                    await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
+                    _currentRegistry?.Models.Add(modelInfo);
+                    if (_currentRegistry != null)
+                        await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
                     
                     UpdateModelList();
                     MessageBox.Show($"Model {selectedModel.DisplayName} downloaded and added successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -405,46 +484,46 @@ public partial class ModelManagementForm : Form
         finally
         {
             Cursor = Cursors.Default;
-            buttonDownloadModel.Enabled = true;
+            buttonDownloadModel?.Enabled = true;
         }
     }
 
-    private async void buttonEnableDisable_Click(object sender, EventArgs e)
+    private async void buttonEnableDisable_Click(object? sender, EventArgs e)
     {
-        if (listViewInstalledModels.SelectedItems.Count == 0)
+        if (listViewInstalledModels != null && listViewInstalledModels.SelectedItems.Count > 0)
+        {
+            var selectedModel = (ModelInfo)listViewInstalledModels.SelectedItems[0].Tag!;
+            var newState = !selectedModel.IsEnabled;
+            try
+            {
+                var success = await _modelManager.EnableModelAsync(selectedModel.Name, newState);
+                if (success)
+                {
+                    selectedModel.IsEnabled = newState;
+                    UpdateModelList();
+                    _loggingService.Log($"Model {selectedModel.Name} {(newState ? "enabled" : "disabled")}");
+                }
+                else
+                {
+                    MessageBox.Show($"Failed to {(newState ? "enable" : "disable")} model {selectedModel.DisplayName}.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogException(ex, $"Enable/disable model {selectedModel.Name}");
+                MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+        else
         {
             MessageBox.Show("Please select a model to enable/disable.", "No Model Selected", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-
-        var selectedModel = (ModelInfo)listViewInstalledModels.SelectedItems[0].Tag;
-        var newState = !selectedModel.IsEnabled;
-        
-        try
-        {
-            var success = await _modelManager.EnableModelAsync(selectedModel.Name, newState);
-            
-            if (success)
-            {
-                selectedModel.IsEnabled = newState;
-                UpdateModelList();
-                _loggingService.Log($"Model {selectedModel.Name} {(newState ? "enabled" : "disabled")}");
-            }
-            else
-            {
-                MessageBox.Show($"Failed to {(newState ? "enable" : "disable")} model {selectedModel.DisplayName}.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            _loggingService.LogException(ex, $"Enable/disable model {selectedModel.Name}");
-            MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
     }
 
-    private async void comboBoxDefaultModel_SelectedIndexChanged(object sender, EventArgs e)
+    private async void comboBoxDefaultModel_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        if (string.IsNullOrEmpty(comboBoxDefaultModel.Text) || _currentRegistry == null) return;
+        if (string.IsNullOrEmpty(comboBoxDefaultModel?.Text) || _currentRegistry == null) return;
         
         try
         {
@@ -459,105 +538,111 @@ public partial class ModelManagementForm : Form
         }
     }
 
-    private async void buttonValidateModel_Click(object sender, EventArgs e)
+    private async void buttonValidateModel_Click(object? sender, EventArgs e)
     {
-        if (listViewInstalledModels.SelectedItems.Count == 0)
+        if (listViewInstalledModels != null && listViewInstalledModels.SelectedItems.Count > 0)
+        {
+            var selectedModel = (ModelInfo)listViewInstalledModels.SelectedItems[0].Tag!;
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                buttonValidateModel?.Enabled = false;
+                var isValid = await _modelManager.ValidateModelAsync(selectedModel);
+                if (isValid)
+                {
+                    MessageBox.Show($"Model {selectedModel.DisplayName} is valid and ready to use.", "Validation Successful", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show($"Model {selectedModel.DisplayName} validation failed. Check the log for details.", "Validation Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogException(ex, $"Validate model {selectedModel.Name}");
+                MessageBox.Show($"Error validating model: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+                buttonValidateModel?.Enabled = true;
+            }
+        }
+        else
         {
             MessageBox.Show("Please select a model to validate.", "No Model Selected", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-
-        var selectedModel = (ModelInfo)listViewInstalledModels.SelectedItems[0].Tag;
-        
-        try
-        {
-            Cursor = Cursors.WaitCursor;
-            buttonValidateModel.Enabled = false;
-            
-            var isValid = await _modelManager.ValidateModelAsync(selectedModel);
-            
-            if (isValid)
-            {
-                MessageBox.Show($"Model {selectedModel.DisplayName} is valid and ready to use.", "Validation Successful", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            else
-            {
-                MessageBox.Show($"Model {selectedModel.DisplayName} validation failed. Check the log for details.", "Validation Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-        }
-        catch (Exception ex)
-        {
-            _loggingService.LogException(ex, $"Validate model {selectedModel.Name}");
-            MessageBox.Show($"Error validating model: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-        finally
-        {
-            Cursor = Cursors.Default;
-            buttonValidateModel.Enabled = true;
-        }
     }
 
-    private void buttonRefresh_Click(object sender, EventArgs e)
+    private void buttonRefresh_Click(object? sender, EventArgs e)
     {
         LoadModelsAsync();
     }
 
-    private void buttonClose_Click(object sender, EventArgs e)
+    private void buttonClose_Click(object? sender, EventArgs e)
     {
         Close();
     }
 
-    private void listViewInstalledModels_SelectedIndexChanged(object sender, EventArgs e)
+    private void listViewInstalledModels_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        var hasSelection = listViewInstalledModels.SelectedItems.Count > 0;
-        buttonEnableDisable.Enabled = hasSelection;
-        buttonValidateModel.Enabled = hasSelection;
+        var hasSelection = listViewInstalledModels != null && listViewInstalledModels.SelectedItems.Count > 0;
+        buttonEnableDisable?.Enabled = hasSelection;
+        buttonValidateModel?.Enabled = hasSelection;
         
         if (hasSelection)
         {
-            var selectedModel = (ModelInfo)listViewInstalledModels.SelectedItems[0].Tag;
-            buttonEnableDisable.Text = selectedModel.IsEnabled ? "Disable" : "Enable";
+            var selectedModel = (ModelInfo)listViewInstalledModels!.SelectedItems[0].Tag!;
+            // Disable actions if model is not usable
+            if (!IsModelUsable(selectedModel))
+            {
+                buttonEnableDisable!.Enabled = false;
+                buttonValidateModel!.Enabled = false;
+                return;
+            }
+            buttonEnableDisable!.Text = selectedModel.IsEnabled ? "Disable" : "Enable";
         }
     }
 
-    private void listViewAvailableModels_SelectedIndexChanged(object sender, EventArgs e)
+    private void listViewAvailableModels_SelectedIndexChanged(object? sender, EventArgs e)
     {
-        buttonDownloadModel.Enabled = listViewAvailableModels.SelectedItems.Count > 0;
+        buttonDownloadModel?.Enabled = listViewAvailableModels?.SelectedItems.Count > 0;
     }
 
     private List<ModelInfo> _allModelZooModels = new();
     private bool _isScanningModelZoo = false;
 
-    private async void buttonScanModelZoo_Click(object sender, EventArgs e)
+    private async void buttonScanModelZoo_Click(object? sender, EventArgs e)
     {
         if (_isScanningModelZoo) return;
 
         _isScanningModelZoo = true;
-        buttonScanModelZoo.Enabled = false;
-        labelModelZooStatus.Text = "Scanning Microsoft Model Zoo...";
+        buttonScanModelZoo?.Enabled = false;
+        labelModelZooStatus?.Text = "Scanning Microsoft Model Zoo...";
 
         try
         {
             _allModelZooModels = await _msModelZooService.GetAvailableModelsAsync();
             UpdateModelZooList();
-            labelModelZooStatus.Text = $"Found {_allModelZooModels.Count} models";
+            labelModelZooStatus?.Text = $"Found {_allModelZooModels.Count} models";
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, "Scan Microsoft Model Zoo");
             MessageBox.Show($"Failed to scan Microsoft Model Zoo: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            labelModelZooStatus.Text = "Scan failed";
+            labelModelZooStatus?.Text = "Scan failed";
         }
         finally
         {
-            buttonScanModelZoo.Enabled = true;
+            buttonScanModelZoo?.Enabled = true;
             _isScanningModelZoo = false;
         }
     }
 
     private void UpdateModelZooList()
     {
-        listViewModelZoo.Items.Clear();
+        listViewModelZoo?.Items.Clear();
         
         foreach (var model in _allModelZooModels.OrderByDescending(m => m.Priority))
         {
@@ -571,19 +656,19 @@ public partial class ModelManagementForm : Form
             item.SubItems.Add(model.Description ?? "");
             item.Tag = model;
             
-            listViewModelZoo.Items.Add(item);
+            listViewModelZoo?.Items.Add(item);
         }
     }
 
-    private async void buttonDownloadModelZoo_Click(object sender, EventArgs e)
+    private async void buttonDownloadModelZoo_Click(object? sender, EventArgs e)
     {
-        if (listViewModelZoo.SelectedItems.Count == 0)
+        if (listViewModelZoo?.SelectedItems.Count == 0)
         {
             MessageBox.Show("Please select a model to download.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        var selectedModel = listViewModelZoo.SelectedItems[0].Tag as ModelInfo;
+        var selectedModel = listViewModelZoo?.SelectedItems[0].Tag as ModelInfo;
         if (selectedModel == null) return;
 
         var modelId = selectedModel.AdditionalProperties.GetValueOrDefault("model_zoo_id", "").ToString();
@@ -596,15 +681,15 @@ public partial class ModelManagementForm : Form
         try
         {
             Cursor = Cursors.WaitCursor;
-            buttonDownloadModelZoo.Enabled = false;
-            labelModelZooStatus.Text = $"Downloading {selectedModel.DisplayName}...";
+            buttonDownloadModelZoo?.Enabled = false;
+            labelModelZooStatus?.Text = $"Downloading {selectedModel.DisplayName}...";
 
             var success = await _msModelZooService.DownloadModelAsync(modelId);
             
             if (success)
             {
                 MessageBox.Show($"Successfully downloaded {selectedModel.DisplayName}", "Download Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                labelModelZooStatus.Text = $"Downloaded {selectedModel.DisplayName}";
+                labelModelZooStatus?.Text = $"Downloaded {selectedModel.DisplayName}";
                 
                 // Refresh installed models list
                 LoadModelsAsync();
@@ -612,47 +697,84 @@ public partial class ModelManagementForm : Form
             else
             {
                 MessageBox.Show($"Failed to download {selectedModel.DisplayName}", "Download Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                labelModelZooStatus.Text = "Download failed";
+                labelModelZooStatus?.Text = "Download failed";
             }
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, $"Download Microsoft Model Zoo model {modelId}");
             MessageBox.Show($"Error downloading model: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            labelModelZooStatus.Text = "Download error";
+            labelModelZooStatus?.Text = "Download error";
         }
         finally
         {
             Cursor = Cursors.Default;
-            buttonDownloadModelZoo.Enabled = true;
+            buttonDownloadModelZoo?.Enabled = true;
         }
     }
 
-    private async void buttonConvertToOnnx_Click(object sender, EventArgs e)
+    private bool IsPythonAvailable()
     {
-        if (listViewRepositoryModels.SelectedItems.Count == 0)
+        var possiblePaths = new[]
+        {
+            "python",
+            "python3",
+            "python.exe",
+            "python3.exe"
+        };
+        foreach (var path in possiblePaths)
+        {
+            try
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = path,
+                    Arguments = "--version",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+                using var process = new System.Diagnostics.Process { StartInfo = startInfo };
+                process.Start();
+                process.WaitForExit(2000);
+                if (process.ExitCode == 0)
+                    return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    private async void buttonConvertToOnnx_Click(object? sender, EventArgs e)
+    {
+        if (!IsPythonAvailable())
+        {
+            MessageBox.Show(
+                "Python is not installed or not found in your system PATH. Please install Python 3.8+ and ensure it is available in your PATH before converting models.",
+                "Python Not Found",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return;
+        }
+        if (listViewRepositoryModels?.SelectedItems.Count == 0)
         {
             MessageBox.Show("Please select a PyTorch model to convert to ONNX.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-
         var selectedModel = listViewRepositoryModels.SelectedItems[0].Tag as ModelInfo;
         if (selectedModel == null) return;
-
         var modelId = selectedModel.AdditionalProperties.GetValueOrDefault("model_id", "").ToString();
         if (string.IsNullOrEmpty(modelId))
         {
             MessageBox.Show("Invalid model selection.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
-
         // Only allow conversion for PyTorch models that are not yet converted
         if (selectedModel.ModelType != ModelType.PyTorch || selectedModel.ConversionStatus != ConversionStatus.NotConverted)
         {
             MessageBox.Show("Only unconverted PyTorch models can be converted.", "Conversion Not Allowed", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-
         // Check if conversion is supported
         var isSupported = await _conversionService.IsConversionSupportedAsync(modelId);
         if (!isSupported)
@@ -662,25 +784,34 @@ public partial class ModelManagementForm : Form
                 "Conversion Warning",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
-            
             if (result != DialogResult.Yes)
                 return;
         }
-
         try
         {
             Cursor = Cursors.WaitCursor;
-            buttonConvertToOnnx.Enabled = false;
-            labelRepositoryStatus.Text = $"Converting {selectedModel.DisplayName} to ONNX...";
-
+            buttonConvertToOnnx!.Enabled = false;
+            labelRepositoryStatus!.Text = $"Converting {selectedModel.DisplayName} to ONNX...";
             // Update status in registry
             selectedModel.ConversionStatus = ConversionStatus.Converting;
-            await _modelManager.SaveModelRegistryAsync(_currentRegistry!, "models/model_registry.json");
+            if (_currentRegistry != null)
+                await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
             UpdateModelList();
-
-            // For now, we'll use the model ID directly (in a real implementation, you'd download the PyTorch model first)
-            var success = await _conversionService.ConvertPyTorchToOnnxAsync(modelId, "", "");
-
+            // Call the Python conversion script and capture output/errors
+            var success = false;
+            string output = string.Empty;
+            string error = string.Empty;
+            try
+            {
+                // Use the same logic as ModelConversionService, but capture output
+                var scriptPath = await _conversionService.ConvertPyTorchToOnnxAsync(modelId, "", "");
+                // If ConvertPyTorchToOnnxAsync returns true, treat as success
+                success = scriptPath;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
             // Update model type and conversion status after conversion
             if (success)
             {
@@ -692,43 +823,122 @@ public partial class ModelManagementForm : Form
             else
             {
                 selectedModel.ConversionStatus = ConversionStatus.Failed;
-                MessageBox.Show($"Failed to convert {selectedModel.DisplayName} to ONNX format", "Conversion Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Failed to convert {selectedModel.DisplayName} to ONNX format.\n{error}", "Conversion Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 labelRepositoryStatus.Text = "Conversion failed";
             }
-            await _modelManager.SaveModelRegistryAsync(_currentRegistry!, "models/model_registry.json");
+            if (_currentRegistry != null)
+                await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
             UpdateModelList();
         }
         catch (Exception ex)
         {
             selectedModel.ConversionStatus = ConversionStatus.Failed;
-            await _modelManager.SaveModelRegistryAsync(_currentRegistry!, "models/model_registry.json");
+            if (_currentRegistry != null)
+                await _modelManager.SaveModelRegistryAsync(_currentRegistry, "models/model_registry.json");
             UpdateModelList();
             _loggingService.LogException(ex, $"Convert to ONNX for {modelId}");
             MessageBox.Show($"Error converting model: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            labelRepositoryStatus.Text = "Conversion error";
+            labelRepositoryStatus!.Text = "Conversion error";
         }
         finally
         {
             Cursor = Cursors.Default;
-            buttonConvertToOnnx.Enabled = true;
+            buttonConvertToOnnx!.Enabled = true;
         }
     }
 
-    private void listViewRepositoryModels_SelectedIndexChanged(object sender, EventArgs e)
+    private void buttonDeleteAllModels_Click(object? sender, EventArgs e)
     {
-        if (listViewRepositoryModels.SelectedItems.Count == 0)
+        var result = MessageBox.Show(
+            "Are you sure you want to delete ALL models and their files? This cannot be undone.",
+            "Confirm Delete All Models",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+        if (result != DialogResult.Yes) return;
+        try
         {
-            buttonConvertToOnnx.Enabled = false;
+            var modelsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "models");
+            if (Directory.Exists(modelsDir))
+            {
+                foreach (var dir in Directory.GetDirectories(modelsDir))
+                {
+                    if (Path.GetFileName(dir).Equals("conversion_scripts", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    Directory.Delete(dir, true);
+                }
+                foreach (var file in Directory.GetFiles(modelsDir))
+                {
+                    if (Path.GetFileName(file).Equals("model_registry.json", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    File.Delete(file);
+                }
+            }
+            MessageBox.Show("All models deleted successfully.", "Delete Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            LoadModelsAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Error deleting models: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async void buttonGenerateLabels_Click(object? sender, EventArgs e)
+    {
+        if (listViewRepositoryModels?.SelectedItems.Count == 0)
+        {
+            MessageBox.Show("Please select a PyTorch model to generate labels for.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var selectedModel = listViewRepositoryModels.SelectedItems[0].Tag as ModelInfo;
+        if (selectedModel == null || selectedModel.ModelType != ModelType.PyTorch)
+        {
+            MessageBox.Show("Only PyTorch models can have labels generated.", "Invalid Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var modelDir = Path.Combine("models", selectedModel.Name.Replace("/", "-"));
+        var labelsPath = Path.Combine(modelDir, "labels.txt");
+        try
+        {
+            // Generate basic labels (1000 generic classes)
+            var labels = Enumerable.Range(0, 1000).Select(i => $"class_{i:D4}").ToList();
+            await File.WriteAllLinesAsync(labelsPath, labels);
+            MessageBox.Show($"Labels file generated at {labelsPath}", "Labels Generated", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            LoadModelsAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Error generating labels: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void listViewRepositoryModels_SelectedIndexChanged(object? sender, EventArgs e)
+    {
+        if (listViewRepositoryModels?.SelectedItems.Count == 0)
+        {
+            buttonConvertToOnnx?.Enabled = false;
+            buttonGenerateLabels?.Enabled = false;
             return;
         }
         var selectedModel = listViewRepositoryModels.SelectedItems[0].Tag as ModelInfo;
         if (selectedModel == null)
         {
-            buttonConvertToOnnx.Enabled = false;
+            buttonConvertToOnnx?.Enabled = false;
+            buttonGenerateLabels?.Enabled = false;
+            return;
+        }
+        // Disable actions if model is not usable
+        if (!IsModelUsable(selectedModel))
+        {
+            buttonConvertToOnnx!.Enabled = false;
+            buttonGenerateLabels!.Enabled = false;
             return;
         }
         // Enable only if PyTorch and not yet converted
-        buttonConvertToOnnx.Enabled = (selectedModel.ModelType == ModelType.PyTorch && selectedModel.ConversionStatus == ConversionStatus.NotConverted);
+        buttonConvertToOnnx!.Enabled = (selectedModel.ModelType == ModelType.PyTorch && selectedModel.ConversionStatus == ConversionStatus.NotConverted);
+        // Enable Generate Labels if PyTorch and labels file is missing
+        var modelDir = Path.Combine("models", selectedModel.Name.Replace("/", "-"));
+        var labelsPath = Path.Combine(modelDir, "labels.txt");
+        buttonGenerateLabels!.Enabled = (selectedModel.ModelType == ModelType.PyTorch && !File.Exists(labelsPath));
     }
 
     private void InitializeComponent()
@@ -776,6 +986,8 @@ public partial class ModelManagementForm : Form
         this.buttonDownloadModelZoo = new Button();
         this.labelModelZoo = new Label();
         this.labelModelZooStatus = new Label();
+        this.buttonDeleteAllModels = new Button();
+        this.buttonGenerateLabels = new Button();
         this.SuspendLayout();
         
         // Form
@@ -878,7 +1090,7 @@ public partial class ModelManagementForm : Form
             this.listViewInstalledModels, this.listViewAvailableModels,
             this.comboBoxDefaultModel,
             this.buttonDownloadModel, this.buttonEnableDisable, this.buttonValidateModel,
-            this.buttonRefresh, this.buttonClose
+            this.buttonRefresh, this.buttonClose, this.buttonDeleteAllModels, this.buttonGenerateLabels
         });
         
         // Tab Page 2 - Repository Browser
@@ -1107,47 +1319,47 @@ public partial class ModelManagementForm : Form
         parent.Controls.Add(checkbox);
     }
 
-    private ListView listViewInstalledModels;
-    private ListView listViewAvailableModels;
-    private ListView listViewRepositoryModels;
-    private Button buttonDownloadModel;
-    private Button buttonEnableDisable;
-    private Button buttonValidateModel;
-    private Button buttonRefresh;
-    private Button buttonClose;
-    private Button buttonScanRepository;
-    private Button buttonDownloadRepositoryModel;
-    private Button buttonConvertToOnnx;
-    private Button buttonApplyFilters;
-    private Button buttonClearFilters;
-    private ComboBox comboBoxDefaultModel;
-    private ProgressBar progressBarRepository;
-    private Label label1;
-    private Label label2;
-    private Label label3;
-    private Label labelRepositoryStatus;
-    private Label labelRepositoryFilters;
-    private TrackBar trackBarMinDownloads;
-    private TrackBar trackBarMaxSize;
-    private TrackBar trackBarMinLikes;
-    private TrackBar trackBarMaxModels;
-    private ComboBox comboBoxLicenses;
-    private TextBox textBoxSearchTerms;
-    private Label labelMinDownloadsValue;
-    private Label labelMaxSizeValue;
-    private Label labelMinLikesValue;
-    private Label labelMaxModelsValue;
-    private CheckBox checkBoxExcludeArchived;
-    private CheckBox checkBoxExcludePrivate;
-    private CheckBox checkBoxOnlyVerified;
-    private CheckBox checkBoxPreferImageNet;
-    private TabControl tabControl;
-    private TabPage tabPageInstalled;
-    private TabPage tabPageRepository;
-    private TabPage tabPageModelZoo;
-    private ListView listViewModelZoo;
-    private Button buttonScanModelZoo;
-    private Button buttonDownloadModelZoo;
-    private Label labelModelZoo;
-    private Label labelModelZooStatus;
+    private ListView? listViewInstalledModels;
+    private ListView? listViewAvailableModels;
+    private ListView? listViewRepositoryModels;
+    private Button? buttonDownloadModel;
+    private Button? buttonEnableDisable;
+    private Button? buttonValidateModel;
+    private Button? buttonRefresh;
+    private Button? buttonClose;
+    private Button? buttonScanRepository;
+    private Button? buttonDownloadRepositoryModel;
+    private Button? buttonConvertToOnnx;
+    private Button? buttonApplyFilters;
+    private Button? buttonClearFilters;
+    private ComboBox? comboBoxDefaultModel;
+    private ProgressBar? progressBarRepository;
+    private Label? label1;
+    private Label? label2;
+    private Label? label3;
+    private Label? labelRepositoryStatus;
+    private Label? labelRepositoryFilters;
+    private TrackBar? trackBarMinDownloads;
+    private TrackBar? trackBarMaxSize;
+    private TrackBar? trackBarMinLikes;
+    private TrackBar? trackBarMaxModels;
+    private ComboBox? comboBoxLicenses;
+    private TextBox? textBoxSearchTerms;
+    private Label? labelMinDownloadsValue;
+    private Label? labelMaxSizeValue;
+    private Label? labelMinLikesValue;
+    private Label? labelMaxModelsValue;
+    private CheckBox? checkBoxExcludeArchived;
+    private CheckBox? checkBoxExcludePrivate;
+    private CheckBox? checkBoxOnlyVerified;
+    private CheckBox? checkBoxPreferImageNet;
+    private TabControl? tabControl;
+    private TabPage? tabPageInstalled;
+    private TabPage? tabPageRepository;
+    private TabPage? tabPageModelZoo;
+    private ListView? listViewModelZoo;
+    private Button? buttonScanModelZoo;
+    private Button? buttonDownloadModelZoo;
+    private Label? labelModelZoo;
+    private Label? labelModelZooStatus;
 } 

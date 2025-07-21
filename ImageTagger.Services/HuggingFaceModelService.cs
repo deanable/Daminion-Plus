@@ -362,8 +362,19 @@ public class HuggingFaceModelService
         }
     }
 
+    private static readonly string[] SupportedArchitectures = new[]
+    {
+        "resnet", "efficientnet", "mobilenet", "inception", "vgg", "densenet", "alexnet", "squeezenet"
+    };
+
     private bool ShouldIncludeModel(HuggingFaceModel model, ModelFilterOptions filterOptions)
     {
+        // Only include models with a supported architecture in the name or tags
+        var name = model.Id?.ToLowerInvariant() ?? "";
+        var tags = model.Tags?.Select(t => t.ToLowerInvariant()) ?? Enumerable.Empty<string>();
+        bool isSupported = SupportedArchitectures.Any(arch => name.Contains(arch) || tags.Any(tag => tag.Contains(arch)));
+        if (!isSupported)
+            return false;
         // Check downloads
         if (model.Downloads < filterOptions.MinDownloads)
         {

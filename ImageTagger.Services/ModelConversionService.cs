@@ -343,17 +343,16 @@ if __name__ == '__main__':
         }
     }
 
-    public async Task<bool> IsConversionSupportedAsync(string modelId)
+    public Task<bool> IsConversionSupportedAsync(string modelId)
     {
         // Check if the model is likely to be convertible
-        // This is a basic check - in practice, you'd want more sophisticated detection
         var supportedPatterns = new[]
         {
             "resnet", "mobilenet", "efficientnet", "vit", "swin", "convnext",
             "densenet", "inception", "alexnet", "vgg", "googlenet"
         };
-
-        return supportedPatterns.Any(pattern => 
+        bool result = supportedPatterns.Any(pattern => 
             modelId.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(result);
     }
 } 

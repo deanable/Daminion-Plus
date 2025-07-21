@@ -201,88 +201,88 @@ public class ModelManagementExample
     /// <summary>
     /// Example: Download and add a new model
     /// </summary>
-    public async Task<bool> AddNewModelAsync(string modelName)
+    public Task<bool> AddNewModelAsync(string modelName)
     {
         try
         {
             _loggingService.Log($"Adding new model: {modelName}");
 
             // Check if model is available
-            var availableModels = await _modelDownloader.GetAvailableModelsFromRepositoryAsync();
+            var availableModels = _modelDownloader.GetAvailableModelsFromRepositoryAsync().Result;
             var model = availableModels.FirstOrDefault(m => m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
             
             if (model == null)
             {
                 _loggingService.Log($"Model {modelName} not found in available models", LogLevel.Warning);
-                return false;
+                return Task.FromResult(false);
             }
 
             // Download the model
-            var success = await _modelDownloader.DownloadModelFromRepositoryAsync(modelName);
+            var success = _modelDownloader.DownloadModelFromRepositoryAsync(modelName).Result;
             
             if (success)
             {
                 // Validate and add to registry
                 var modelPath = Path.Combine("models", modelName);
-                var isValid = await _modelDownloader.ValidateDownloadedModelAsync(modelName, modelPath);
+                var isValid = _modelDownloader.ValidateDownloadedModelAsync(modelName, modelPath).Result;
                 
                 if (isValid)
                 {
-                    var modelInfo = await _modelDownloader.CreateModelInfoFromDownloadedAsync(modelName, modelPath);
+                    var modelInfo = _modelDownloader.CreateModelInfoFromDownloadedAsync(modelName, modelPath).Result;
                     
-                    var registry = await _modelManager.LoadModelRegistryAsync("models/model_registry.json");
+                    var registry = _modelManager.LoadModelRegistryAsync("models/model_registry.json").Result;
                     registry.Models.Add(modelInfo);
-                    await _modelManager.SaveModelRegistryAsync(registry, "models/model_registry.json");
+                    _modelManager.SaveModelRegistryAsync(registry, "models/model_registry.json").Wait();
                     
                     _loggingService.Log($"Model {modelName} added successfully");
-                    return true;
+                    return Task.FromResult(true);
                 }
                 else
                 {
                     _loggingService.Log($"Model {modelName} downloaded but validation failed", LogLevel.Warning);
-                    return false;
+                    return Task.FromResult(false);
                 }
             }
             
-            return false;
+            return Task.FromResult(false);
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, $"AddNewModel {modelName}");
-            return false;
+            return Task.FromResult(false);
         }
     }
 
     /// <summary>
     /// Example: Switch the default model
     /// </summary>
-    public async Task<bool> SwitchDefaultModelAsync(string modelName)
+    public Task<bool> SwitchDefaultModelAsync(string modelName)
     {
         try
         {
             _loggingService.Log($"Switching default model to: {modelName}");
             
-            await _modelManager.SetDefaultModelAsync(modelName);
+            _modelManager.SetDefaultModelAsync(modelName).Wait();
             
             _loggingService.Log($"Default model switched to {modelName} successfully");
-            return true;
+            return Task.FromResult(true);
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, $"SwitchDefaultModel {modelName}");
-            return false;
+            return Task.FromResult(false);
         }
     }
 
     /// <summary>
     /// Example: Get information about all available models
     /// </summary>
-    public async Task<List<ModelInfo>> GetAllAvailableModelsAsync()
+    public Task<List<ModelInfo>> GetAllAvailableModelsAsync()
     {
         try
         {
-            var availableModels = await _modelDownloader.GetAvailableModelsFromRepositoryAsync();
-            var installedModels = await _modelManager.GetAllModelsAsync();
+            var availableModels = _modelDownloader.GetAvailableModelsFromRepositoryAsync().Result;
+            var installedModels = _modelManager.GetAllModelsAsync().Result;
             
             // Mark which models are already installed
             foreach (var availableModel in availableModels)
@@ -291,25 +291,25 @@ public class ModelManagementExample
                 availableModel.AdditionalProperties["IsInstalled"] = isInstalled;
             }
             
-            return availableModels;
+            return Task.FromResult(availableModels);
         }
         catch (Exception ex)
         {
             _loggingService.LogException(ex, "GetAllAvailableModels");
-            return new List<ModelInfo>();
+            return Task.FromResult(new List<ModelInfo>());
         }
     }
 
     /// <summary>
     /// Example: Get performance comparison between models
     /// </summary>
-    public async Task<Dictionary<string, TimeSpan>> CompareModelPerformanceAsync(string imagePath)
+    public Task<Dictionary<string, TimeSpan>> CompareModelPerformanceAsync(string imagePath)
     {
         var results = new Dictionary<string, TimeSpan>();
         
         try
         {
-            var models = await _modelManager.GetAllModelsAsync();
+            var models = _modelManager.GetAllModelsAsync().Result;
             var enabledModels = models.Where(m => m.IsEnabled).ToList();
 
             _loggingService.Log($"Comparing performance of {enabledModels.Count} models...");
@@ -319,7 +319,7 @@ public class ModelManagementExample
                 try
                 {
                     var startTime = DateTime.UtcNow;
-                    var result = await _enhancedTaggingService.TagImageWithModelAsync(imagePath, model.Name);
+                    var result = _enhancedTaggingService.TagImageWithModelAsync(imagePath, model.Name).Result;
                     var duration = DateTime.UtcNow - startTime;
                     
                     results[model.DisplayName] = duration;
@@ -337,6 +337,6 @@ public class ModelManagementExample
             _loggingService.LogException(ex, "CompareModelPerformance");
         }
         
-        return results;
+        return Task.FromResult(results);
     }
 } 
